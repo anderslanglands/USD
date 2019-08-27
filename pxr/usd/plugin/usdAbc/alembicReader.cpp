@@ -1369,7 +1369,7 @@ _ReaderContext::_OpenOgawa(
     std::recursive_mutex** mutex) const
 {
     *format = "Ogawa";
-    *result = IArchive(Alembic::AbcCoreOgawa::ReadArchive(_GetNumOgawaStreams()),
+    *result = IArchive(Alembic::AbcCoreOgawa::ReadArchive(_GetNumOgawaStreams(), true),
                        filePath, ErrorHandler::kQuietNoopPolicy);
     return *result;
 }

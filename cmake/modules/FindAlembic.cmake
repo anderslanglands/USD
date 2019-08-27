@@ -45,7 +45,7 @@
 #=============================================================================
 
 set(LIBRARY_PATHS
-    ${ALEMBIC_DIR}/lib/
+    $ENV{ALEMBIC_DIR}/lib/
     ${ALEMBIC_DIR}/lib/static
     /usr/lib
     /usr/local/lib
@@ -132,7 +132,7 @@ endif()
 
 # Find Alembic include dir
 find_path (ALEMBIC_INCLUDE_DIR Alembic/Abc/All.h
-           HINTS ${ALEMBIC_DIR}/include
+    HINTS $ENV{ALEMBIC_DIR}/include
 )
 
 include(FindPackageHandleStandardArgs)

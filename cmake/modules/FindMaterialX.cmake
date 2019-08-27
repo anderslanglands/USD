@@ -88,7 +88,7 @@ find_path(MATERIALX_STDLIB_DIR
         "$ENV{MATERIALX_ROOT}"        
         "${MATERIALX_BASE_DIR}"
     PATH_SUFFIXES
-        documents/Libraries
+        documents/Libraries/stdlib
     DOC
         "MaterialX Standard Libraries Path"
 )

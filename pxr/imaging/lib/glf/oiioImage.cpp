@@ -493,7 +493,7 @@ ARCH_PRAGMA_DEPRECATED_POSIX_NAME
 
     // Read pixel data
     TypeDesc type = _GetOIIOBaseType(storage.type);
-    if (!image->get_pixels(0, storage.width, 0, storage.height, 0, 1,
+    if (!image->get_pixels(ROI(),
                               type, storage.data)) {
         TF_CODING_ERROR("unable to get_pixels");
         return false;
