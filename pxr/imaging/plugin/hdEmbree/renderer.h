@@ -24,7 +24,7 @@
 #ifndef PXR_IMAGING_PLUGIN_HD_EMBREE_RENDERER_H
 #define PXR_IMAGING_PLUGIN_HD_EMBREE_RENDERER_H
 
-#include "pxr/pxr.h"
+#include "light.h"
 
 #include "pxr/imaging/hd/renderThread.h"
 #include "pxr/imaging/hd/renderPassState.h"
@@ -37,6 +37,7 @@
 
 #include <random>
 #include <atomic>
+#include <map>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -76,6 +77,9 @@ public:
     /// Set the aov bindings to use for rendering.
     ///   \param aovBindings A list of aov bindings.
     void SetAovBindings(HdRenderPassAovBindingVector const &aovBindings);
+
+    /// Set a light
+    unsigned SetLight(SdfPath const& lightPath, Light const& light);
 
     /// Get the aov bindings being used for rendering.
     ///   \return the current aov bindings.
@@ -204,6 +208,10 @@ private:
 
     // How many samples have been completed.
     std::atomic<int> _completedSamples;
+
+    // Lights
+    std::map<SdfPath, unsigned> _lightMap;
+    std::vector<Light> _lights;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

@@ -23,6 +23,7 @@
 //
 #include "pxr/imaging/plugin/hdEmbree/renderer.h"
 
+#include "light.h"
 #include "pxr/imaging/plugin/hdEmbree/renderBuffer.h"
 #include "pxr/imaging/plugin/hdEmbree/config.h"
 #include "pxr/imaging/plugin/hdEmbree/context.h"
@@ -33,10 +34,13 @@
 #include "pxr/base/gf/matrix3f.h"
 #include "pxr/base/gf/vec2f.h"
 #include "pxr/base/work/loops.h"
+#include "renderer.h"
 
+#include <algorithm>
 #include <boost/functional/hash.hpp>
 
 #include <chrono>
+#include <random>
 #include <thread>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -121,6 +125,22 @@ HdEmbreeRenderer::SetAovBindings(
 
     // Re-validate the attachments.
     _aovBindingsNeedValidation = true;
+}
+
+unsigned HdEmbreeRenderer::SetLight(SdfPath const& lightPath, Light const& light)
+{
+    auto it = _lightMap.find(lightPath);
+    if (it != _lightMap.end())
+    {
+        _lights[it->second] = light;
+        return it->second;
+    }
+    else
+    {
+        _lights.push_back(light);
+        _lightMap[lightPath] = _lights.size() - 1;
+        return _lights.size() - 1;
+    }
 }
 
 bool
@@ -856,6 +876,45 @@ HdEmbreeRenderer::_ComputePrimvar(RTCRayHit const& rayHit,
     return false;
 }
 
+// XXX: ported from PBRT
+static GfVec3f SphericalDirection(float sinTheta, float cosTheta,
+                                                float phi) {
+    return GfVec3f(GfClamp(sinTheta, -1, 1) * GfCos(phi),
+                    GfClamp(sinTheta, -1, 1) * GfSin(phi), GfClamp(cosTheta, -1, 1));
+}
+
+// XXX: ported from PBRT
+static GfVec3f SampleUniformCone(GfVec2f u, float angle) 
+{
+    float cosAngle = GfCos(angle);
+    float cosTheta = (1 - u[0]) + u[0] * cosAngle;
+    float sinTheta = GfSqrt(GfMax(0.0f, 1.0f - cosTheta*cosTheta));
+    float phi = u[1] * 2.0f * M_PI;
+    return SphericalDirection(sinTheta, cosTheta, phi);
+}
+
+// XXX: ported from PBRT
+static float UniformConePDF(float angle) {
+    return 1 / (2 * M_PI * (1 - GfCos(angle)));
+}
+
+static GfVec3f EvalDistantLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, std::default_random_engine& random)
+{
+    /// XXX: This is artefacty as hell. No idea how this is supposed to work. 
+    /// Probably because the seed is trash, but it gets hidden by the multiple samples
+    /// taken by the AO path
+    /// Replace with PCG?
+    std::uniform_real_distribution<float> uniform_dist(0.0f, 1.0f);
+    std::function<float()> uniform_float = std::bind(uniform_dist, random);
+
+    // There's an implicit double-negation of the wI direction here
+    GfVec3f localDir = SampleUniformCone(GfVec2f(uniform_float(), uniform_float()), light.distant.halfAngleRadians);
+    float pdf = UniformConePDF(light.distant.halfAngleRadians);
+    GfVec3f wI = light.xform.TransformDir(localDir);
+
+    return light.luminance * std::max(0.0f, GfDot(wI, normal)) / pdf * (0.18 / M_PI);
+}
+
 GfVec4f
 HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
                                 std::default_random_engine &random,
@@ -907,6 +966,7 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
     // Make sure the normal is unit-length.
     normal.Normalize();
 
+#if 0
     // Lighting model: (camera dot normal), i.e. diffuse-only point light
     // centered on the camera.
     GfVec3f dir = GfVec3f(rayHit.ray.dir_x, rayHit.ray.dir_y, rayHit.ray.dir_z);
@@ -921,12 +981,25 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
 
     // Return color * diffuseLight * aoLightIntensity.
     GfVec3f finalColor = color * diffuseLight * aoLightIntensity;
+#else
 
-    // Clamp colors to [0,1].
+    GfVec3f finalColor(0);
+    for (auto const& light: _lights)
+    {
+        switch (light.kind)
+        {
+        case LightKind::Distant:
+            finalColor += EvalDistantLight(light, hitPos, normal, random);
+            break;
+        }
+    }
+#endif
+
+    // Clamp colors to > 0
     GfVec4f output;
-    output[0] = std::max(0.0f, std::min(1.0f, finalColor[0]));
-    output[1] = std::max(0.0f, std::min(1.0f, finalColor[1]));
-    output[2] = std::max(0.0f, std::min(1.0f, finalColor[2]));
+    output[0] = std::max(0.0f, finalColor[0]);
+    output[1] = std::max(0.0f, finalColor[1]);
+    output[2] = std::max(0.0f, finalColor[2]);
     output[3] = 1.0f;
     return output;
 }
