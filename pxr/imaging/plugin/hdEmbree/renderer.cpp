@@ -900,19 +900,28 @@ static float UniformConePDF(float angle) {
 
 static GfVec3f EvalDistantLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, std::default_random_engine& random)
 {
-    /// XXX: This is artefacty as hell. No idea how this is supposed to work. 
-    /// Probably because the seed is trash, but it gets hidden by the multiple samples
-    /// taken by the AO path
-    /// Replace with PCG?
-    std::uniform_real_distribution<float> uniform_dist(0.0f, 1.0f);
-    std::function<float()> uniform_float = std::bind(uniform_dist, random);
+    if (light.distant.halfAngleRadians > 0.0f)
+    {
+        /// XXX: This is artefacty as hell. No idea how this is supposed to work. 
+        /// Probably because the seed is trash, but it gets hidden by the multiple samples
+        /// taken by the AO path
+        /// Replace with PCG?
+        std::uniform_real_distribution<float> uniform_dist(0.0f, 1.0f);
+        std::function<float()> uniform_float = std::bind(uniform_dist, random);
 
-    // There's an implicit double-negation of the wI direction here
-    GfVec3f localDir = SampleUniformCone(GfVec2f(uniform_float(), uniform_float()), light.distant.halfAngleRadians);
-    float pdf = UniformConePDF(light.distant.halfAngleRadians);
-    GfVec3f wI = light.xform.TransformDir(localDir);
+        // There's an implicit double-negation of the wI direction here
+        GfVec3f localDir = SampleUniformCone(GfVec2f(uniform_float(), uniform_float()), light.distant.halfAngleRadians);
+        float pdf = UniformConePDF(light.distant.halfAngleRadians);
+        GfVec3f wI = light.xform.TransformDir(localDir);
 
-    return light.luminance * std::max(0.0f, GfDot(wI, normal)) / pdf * (0.18 / M_PI);
+        return light.luminance * std::max(0.0f, GfDot(wI, normal)) / (pdf * M_PI);
+    }
+    else
+    {
+        // delta case, infinite pdf
+        GfVec3f wI = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, 1.0f));
+        return light.luminance * std::max(0.0f, GfDot(wI, normal)) / M_PI;
+    }
 }
 
 GfVec4f
@@ -966,34 +975,42 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
     // Make sure the normal is unit-length.
     normal.Normalize();
 
-#if 0
-    // Lighting model: (camera dot normal), i.e. diffuse-only point light
-    // centered on the camera.
-    GfVec3f dir = GfVec3f(rayHit.ray.dir_x, rayHit.ray.dir_y, rayHit.ray.dir_z);
-    float diffuseLight = fabs(GfDot(-dir, normal)) *
-        HdEmbreeConfig::GetInstance().cameraLightIntensity;
-
-    // Lighting gets modulated by an ambient occlusion term.
-    float aoLightIntensity =
-        _ComputeAmbientOcclusion(hitPos, normal, random);
-
-    // XXX: We should support opacity here...
-
-    // Return color * diffuseLight * aoLightIntensity.
-    GfVec3f finalColor = color * diffuseLight * aoLightIntensity;
-#else
-
+    // If there are no lights, then keep the existing camera light + AO path to be
+    // able to inspect the scene
     GfVec3f finalColor(0);
-    for (auto const& light: _lights)
+    if (_lights.empty())
     {
-        switch (light.kind)
+        // Lighting model: (camera dot normal), i.e. diffuse-only point light
+        // centered on the camera.
+        GfVec3f dir = GfVec3f(rayHit.ray.dir_x, rayHit.ray.dir_y, rayHit.ray.dir_z);
+        float diffuseLight = fabs(GfDot(-dir, normal)) *
+            HdEmbreeConfig::GetInstance().cameraLightIntensity;
+
+        // Lighting gets modulated by an ambient occlusion term.
+        float aoLightIntensity =
+            _ComputeAmbientOcclusion(hitPos, normal, random);
+
+        // XXX: We should support opacity here...
+
+        // Return color * diffuseLight * aoLightIntensity.
+        finalColor = color * diffuseLight * aoLightIntensity;
+    }
+    else
+    {
+        /// XXX: Switch this out for 1.0f once we've updated all renderer images to match
+        /// reason being it will be much easier to debug implementations if we remove surface
+        /// effects from the equation
+        float reflectivity = 1.0f;
+        for (auto const& light: _lights)
         {
-        case LightKind::Distant:
-            finalColor += EvalDistantLight(light, hitPos, normal, random);
-            break;
+            switch (light.kind)
+            {
+            case LightKind::Distant:
+                finalColor += EvalDistantLight(light, hitPos, normal, random) * reflectivity;
+                break;
+            }
         }
     }
-#endif
 
     // Clamp colors to > 0
     GfVec4f output;

@@ -74,8 +74,15 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
         // For the distant light, we define normalization as interpreting `inputs:intensity` as specifying
         // lux, which not only "normalizes" the brightness with relation to angle, but also gives us a 
         // meaningful unit
-        float sinTheta = GfSin(light.distant.halfAngleRadians);
-        light.luminance *= 1.0f / (sinTheta*sinTheta);
+        if (light.distant.halfAngleRadians > 0.0f)
+        {
+            float sinTheta = GfSin(light.distant.halfAngleRadians);
+            light.luminance *= 1.0f / (sinTheta*sinTheta);
+        }
+        else
+        {
+            light.luminance *= M_PI;
+        }
     }
 
   } else if (_lightType == HdSprimTypeTokens->domeLight) {
