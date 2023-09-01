@@ -40,6 +40,7 @@
 #include <boost/functional/hash.hpp>
 
 #include <chrono>
+#include <limits>
 #include <random>
 #include <thread>
 
@@ -612,7 +613,8 @@ HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
 /// Fill in an RTCRay structure from the given parameters.
 static void
 _PopulateRay(RTCRay *ray, GfVec3f const& origin, 
-             GfVec3f const& dir, float nearest)
+             GfVec3f const& dir, float nearest, 
+             float furthest = std::numeric_limits<float>::infinity())
 {
     ray->org_x = origin[0];
     ray->org_y = origin[1];
@@ -624,7 +626,7 @@ _PopulateRay(RTCRay *ray, GfVec3f const& origin,
     ray->dir_z = dir[2];
     ray->time = 0.0f;
 
-    ray->tfar = std::numeric_limits<float>::infinity();
+    ray->tfar = furthest;
     ray->mask = -1;
 }
 
@@ -641,7 +643,6 @@ _PopulateRayHit(RTCRayHit* rayHit, GfVec3f const& origin,
     rayHit->hit.primID = RTC_INVALID_GEOMETRY_ID;
     rayHit->hit.geomID = RTC_INVALID_GEOMETRY_ID;
 }
-
 
 /// Generate a random cosine-weighted direction ray (in the hemisphere
 /// around <0,0,1>).  The input is a pair of uniformly distributed random
@@ -898,7 +899,22 @@ static float UniformConePDF(float angle) {
     return 1 / (2 * M_PI * (1 - GfCos(angle)));
 }
 
-static GfVec3f EvalDistantLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, std::default_random_engine& random)
+float HdEmbreeRenderer::_Visibility(GfVec3f const& position, GfVec3f const& direction, float offset)
+{
+    RTCRay shadow;
+    shadow.flags = 0;
+    _PopulateRay(&shadow, position, direction, 0.001f);
+    {
+        RTCIntersectContext context;
+        rtcInitIntersectContext(&context);
+        rtcOccluded1(_scene,&context,&shadow);
+    }
+
+    // occluded sets tfar < 0
+    return shadow.tfar > 0.0f;
+}
+
+GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, std::default_random_engine& random)
 {
     if (light.distant.halfAngleRadians > 0.0f)
     {
@@ -913,14 +929,16 @@ static GfVec3f EvalDistantLight(Light const& light, GfVec3f const& position, GfV
         GfVec3f localDir = SampleUniformCone(GfVec2f(uniform_float(), uniform_float()), light.distant.halfAngleRadians);
         float pdf = UniformConePDF(light.distant.halfAngleRadians);
         GfVec3f wI = light.xform.TransformDir(localDir);
+        float vis = _Visibility(position, wI);
 
-        return light.luminance * std::max(0.0f, GfDot(wI, normal)) / (pdf * M_PI);
+        return light.luminance * std::max(0.0f, GfDot(wI, normal)) * vis / (pdf * M_PI);
     }
     else
     {
         // delta case, infinite pdf
         GfVec3f wI = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, 1.0f));
-        return light.luminance * std::max(0.0f, GfDot(wI, normal)) / M_PI;
+        float vis = _Visibility(position, wI);
+        return light.luminance * std::max(0.0f, GfDot(wI, normal)) * vis / M_PI;
     }
 }
 
@@ -1006,7 +1024,7 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
             switch (light.kind)
             {
             case LightKind::Distant:
-                finalColor += EvalDistantLight(light, hitPos, normal, random) * reflectivity;
+                finalColor += _EvalDistantLight(light, hitPos, normal, random) * reflectivity;
                 break;
             }
         }
