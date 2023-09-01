@@ -25,6 +25,7 @@
 #define PXR_IMAGING_PLUGIN_HD_EMBREE_RENDERER_H
 
 #include "light.h"
+#include "pcg_basic.h"
 
 #include "pxr/imaging/hd/renderThread.h"
 #include "pxr/imaging/hd/renderPassState.h"
@@ -35,7 +36,6 @@
 #include <embree3/rtcore.h>
 #include <embree3/rtcore_ray.h>
 
-#include <random>
 #include <atomic>
 #include <map>
 
@@ -137,17 +137,18 @@ private:
     // rays, and following them/calculating color with _TraceRay. This function
     // renders all tiles between tileStart and tileEnd.
     void _RenderTiles(HdRenderThread *renderThread,
+                      int progression,
                       size_t tileStart, size_t tileEnd);
 
     // Cast a ray into the scene and if it hits an object, write to the bound
     // aov buffers.
     void _TraceRay(unsigned int x, unsigned int y,
                    GfVec3f const& origin, GfVec3f const& dir,
-                   std::default_random_engine &random);
+                   pcg32_random_t& pcgState);
 
     // Compute the color at the given ray hit.
     GfVec4f _ComputeColor(RTCRayHit const& rayHit,
-                          std::default_random_engine &random,
+                          pcg32_random_t& pcgState,
                           GfVec4f const& clearColor);
     // Compute the depth at the given ray hit.
     bool _ComputeDepth(RTCRayHit const& rayHit, float *depth, bool clip);
@@ -167,7 +168,7 @@ private:
     // the light contribution of an infinitely far, pure white dome light.
     float _ComputeAmbientOcclusion(GfVec3f const& position,
                                    GfVec3f const& normal,
-                                   std::default_random_engine &random);
+                                   pcg32_random_t& pcgState);
 
     // Return the visibility from `position` along `direction`
     float _Visibility(GfVec3f const& position, GfVec3f const& direction, float offset = 1.0e-3f);
@@ -176,7 +177,7 @@ private:
     GfVec3f _EvalDistantLight(Light const& light, 
                               GfVec3f const& position, 
                               GfVec3f const& normal, 
-                              std::default_random_engine& random);
+                              pcg32_random_t& pcgState);
 
     // The bound aovs for this renderer.
     HdRenderPassAovBindingVector _aovBindings;

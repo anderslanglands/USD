@@ -21,9 +21,10 @@
 // KIND, either express or implied. See the Apache License for the specific
 // language governing permissions and limitations under the Apache License.
 //
-#include "pxr/imaging/plugin/hdEmbree/renderer.h"
-
+#include "renderer.h"
 #include "light.h"
+
+#include "pcg_basic.h"
 #include "pxr/imaging/plugin/hdEmbree/renderBuffer.h"
 #include "pxr/imaging/plugin/hdEmbree/config.h"
 #include "pxr/imaging/plugin/hdEmbree/context.h"
@@ -34,7 +35,6 @@
 #include "pxr/base/gf/matrix3f.h"
 #include "pxr/base/gf/vec2f.h"
 #include "pxr/base/work/loops.h"
-#include "renderer.h"
 
 #include <algorithm>
 #include <boost/functional/hash.hpp>
@@ -470,6 +470,7 @@ HdEmbreeRenderer::Render(HdRenderThread *renderThread)
         WorkParallelForN(numTilesX*numTilesY,
             std::bind(&HdEmbreeRenderer::_RenderTiles, this,
                 (i == 0) ? nullptr : renderThread,
+                i,
                 std::placeholders::_1, std::placeholders::_2));
 
         // After the first pass, mark the single-sampled attachments as
@@ -508,8 +509,16 @@ HdEmbreeRenderer::Render(HdRenderThread *renderThread)
     }
 }
 
+/// XXX: Taken from PBRT
+float uniformFloat(pcg32_random_t& pcgState)
+{
+    unsigned u = pcg32_random_r(&pcgState);
+    return fminf(float(0x1.fffffep-1), u * 0x1p-32f);
+}
+
 void
 HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
+                                int progression,
                                size_t tileStart, size_t tileEnd)
 {
     const unsigned int minX = _dataWindow.GetMinX();
@@ -532,15 +541,8 @@ HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
     const unsigned int numTilesX =
         (_dataWindow.GetWidth() + tileSize-1) / tileSize;
 
-    // Initialize the RNG for this tile (each tile creates one as
-    // a lazy way to do thread-local RNGs).
-    size_t seed = std::chrono::system_clock::now().time_since_epoch().count();
-    boost::hash_combine(seed, tileStart);
-    std::default_random_engine random(seed);
-
-    // Create a uniform distribution for jitter calculations.
-    std::uniform_real_distribution<float> uniform_dist(0.0f, 1.0f);
-    std::function<float()> uniform_float = std::bind(uniform_dist, random);
+    // Random number state for this thread
+    pcg32_random_t pcgState;
 
     // _RenderTiles gets a range of tiles; iterate through them.
     for (unsigned int tile = tileStart; tile < tileEnd; ++tile) {
@@ -565,10 +567,18 @@ HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
         for (unsigned int y = y0; y < y1; ++y) {
             for (unsigned int x = x0; x < x1; ++x) {
 
+                // Initialize the PCG stream with the pixel index, and offset
+                // this progression within that stream. The magic number here is
+                // just some number that is bigger than the maximum number of numbers we 
+                // expect to generate along a single path to keep the sequences from 
+                // overlapping
+                unsigned int pixelIndex = y * _width + x;
+                pcg32_srandom_r(&pcgState, progression * 251, pixelIndex);
+
                 // Jitter the camera ray direction.
                 GfVec2f jitter(0.0f, 0.0f);
                 if (HdEmbreeConfig::GetInstance().jitterCamera) {
-                    jitter = GfVec2f(uniform_float(), uniform_float());
+                    jitter = GfVec2f(uniformFloat(pcgState), uniformFloat(pcgState));
                 }
 
                 // Un-transform the pixel's NDC coordinates through the
@@ -604,7 +614,7 @@ HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
                 dir = _inverseViewMatrix.TransformDir(dir).GetNormalized();
 
                 // Trace the ray.
-                _TraceRay(x, y, origin, dir, random);
+                _TraceRay(x, y, origin, dir, pcgState);
             }
         }
     }
@@ -666,7 +676,7 @@ _CosineWeightedDirection(GfVec2f const& uniform_float)
 void
 HdEmbreeRenderer::_TraceRay(unsigned int x, unsigned int y,
                             GfVec3f const &origin, GfVec3f const &dir,
-                            std::default_random_engine &random)
+                            pcg32_random_t& pcgState)
 {
     // Intersect the camera ray.
     RTCRayHit rayHit; // EMBREE_FIXME: use RTCRay for occlusion rays
@@ -703,7 +713,7 @@ HdEmbreeRenderer::_TraceRay(unsigned int x, unsigned int y,
 
         if (_aovNames[i].name == HdAovTokens->color) {
             GfVec4f clearColor = _GetClearColor(_aovBindings[i].clearValue);
-            GfVec4f sample = _ComputeColor(rayHit, random, clearColor);
+            GfVec4f sample = _ComputeColor(rayHit, pcgState, clearColor);
             renderBuffer->Write(GfVec3i(x,y,1), 4, sample.data());
         } else if ((_aovNames[i].name == HdAovTokens->cameraDepth ||
                     _aovNames[i].name == HdAovTokens->depth) &&
@@ -914,19 +924,12 @@ float HdEmbreeRenderer::_Visibility(GfVec3f const& position, GfVec3f const& dire
     return shadow.tfar > 0.0f;
 }
 
-GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, std::default_random_engine& random)
+GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, pcg32_random_t& pcgState)
 {
     if (light.distant.halfAngleRadians > 0.0f)
     {
-        /// XXX: This is artefacty as hell. No idea how this is supposed to work. 
-        /// Probably because the seed is trash, but it gets hidden by the multiple samples
-        /// taken by the AO path
-        /// Replace with PCG?
-        std::uniform_real_distribution<float> uniform_dist(0.0f, 1.0f);
-        std::function<float()> uniform_float = std::bind(uniform_dist, random);
-
         // There's an implicit double-negation of the wI direction here
-        GfVec3f localDir = SampleUniformCone(GfVec2f(uniform_float(), uniform_float()), light.distant.halfAngleRadians);
+        GfVec3f localDir = SampleUniformCone(GfVec2f(uniformFloat(pcgState), uniformFloat(pcgState)), light.distant.halfAngleRadians);
         float pdf = UniformConePDF(light.distant.halfAngleRadians);
         GfVec3f wI = light.xform.TransformDir(localDir);
         float vis = _Visibility(position, wI);
@@ -944,7 +947,7 @@ GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& p
 
 GfVec4f
 HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
-                                std::default_random_engine &random,
+                                pcg32_random_t& pcgState,
                                 GfVec4f const& clearColor)
 {
     if (rayHit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
@@ -1006,7 +1009,7 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
 
         // Lighting gets modulated by an ambient occlusion term.
         float aoLightIntensity =
-            _ComputeAmbientOcclusion(hitPos, normal, random);
+            _ComputeAmbientOcclusion(hitPos, normal, pcgState);
 
         // XXX: We should support opacity here...
 
@@ -1024,7 +1027,7 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
             switch (light.kind)
             {
             case LightKind::Distant:
-                finalColor += _EvalDistantLight(light, hitPos, normal, random) * reflectivity;
+                finalColor += _EvalDistantLight(light, hitPos, normal, pcgState) * reflectivity;
                 break;
             }
         }
@@ -1042,12 +1045,8 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
 float
 HdEmbreeRenderer::_ComputeAmbientOcclusion(GfVec3f const& position,
                                            GfVec3f const& normal,
-                                           std::default_random_engine &random)
+                                           pcg32_random_t& pcgState)
 {
-    // Create a uniform random distribution for AO calculations.
-    std::uniform_real_distribution<float> uniform_dist(0.0f, 1.0f);
-    std::function<float()> uniform_float = std::bind(uniform_dist, random);
-
     // 0 ambient occlusion samples means disable the ambient occlusion term.
     if (_ambientOcclusionSamples < 1) {
         return 1.0f;
@@ -1078,12 +1077,18 @@ HdEmbreeRenderer::_ComputeAmbientOcclusion(GfVec3f const& position,
     // equal spacing guarantees.
     std::vector<GfVec2f> samples;
     samples.resize(_ambientOcclusionSamples);
+    // for (int i = 0; i < _ambientOcclusionSamples; ++i) {
+    //     samples[i][0] = (float(i) + uniformFloat(pcgState)) / _ambientOcclusionSamples;
+    // }
+    // std::shuffle(samples.begin(), samples.end(), random);
+    // for (int i = 0; i < _ambientOcclusionSamples; ++i) {
+    //     samples[i][1] = (float(i) + uniformFloat(pcgState)) / _ambientOcclusionSamples;
+    // }
+
+    /// XXX: Do stratified here
     for (int i = 0; i < _ambientOcclusionSamples; ++i) {
-        samples[i][0] = (float(i) + uniform_float()) / _ambientOcclusionSamples;
-    }
-    std::shuffle(samples.begin(), samples.end(), random);
-    for (int i = 0; i < _ambientOcclusionSamples; ++i) {
-        samples[i][1] = (float(i) + uniform_float()) / _ambientOcclusionSamples;
+        samples[i][0] = uniformFloat(pcgState);
+        samples[i][1] = uniformFloat(pcgState);
     }
 
     // Trace ambient occlusion rays. The occlusion factor is the fraction of

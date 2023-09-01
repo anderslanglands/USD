@@ -40,6 +40,7 @@ pxr_plugin(hdEmbree
         renderDelegate
         renderPass
         sampler
+        pcg_basic
 
     PUBLIC_HEADERS
         context.h
