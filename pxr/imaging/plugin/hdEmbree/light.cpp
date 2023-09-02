@@ -96,6 +96,16 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
         sceneDelegate->GetLightParamValue(id, HdLightTokens->height)
             .Get<float>(),
     };
+
+    if (sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize).Get<bool>()) {
+        // Normalize by surface area
+        GfVec3f U(light.rect.width, 0.0f, 0.0f);
+        GfVec3f V(0.0f, light.rect.height, 0.0f);
+        U = light.xform.TransformDir(U);
+        V = light.xform.TransformDir(V);
+        light.luminance /= GfCross(U, V).GetLength();
+    }
+
   } else if (_lightType == HdSprimTypeTokens->sphereLight) {
     light.kind = LightKind::Sphere;
     light.sphere = {

@@ -573,7 +573,22 @@ HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
                 // expect to generate along a single path to keep the sequences from 
                 // overlapping
                 unsigned int pixelIndex = y * _width + x;
-                pcg32_srandom_r(&pcgState, progression * 251, pixelIndex);
+                // XXX: This is correlated slightly
+                // pcg32_srandom_r(&pcgState, progression * _samplesToConvergence * 251 * _width * _height, 13 + pixelIndex * 7);
+
+                unsigned z = progression;
+                unsigned depth = _samplesToConvergence;
+
+                unsigned yy = pixelIndex;
+                unsigned height = _width * _height;
+
+                unsigned xx = 0;
+                unsigned width = 128;
+
+                pcg32_srandom_r(&pcgState, 
+                    yy * width * z * (depth * width),
+                    0xdeadbeef
+                );
 
                 // Jitter the camera ray direction.
                 GfVec2f jitter(0.0f, 0.0f);
@@ -932,18 +947,46 @@ GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& p
         GfVec3f localDir = SampleUniformCone(GfVec2f(uniformFloat(pcgState), uniformFloat(pcgState)), light.distant.halfAngleRadians);
         float pdf = UniformConePDF(light.distant.halfAngleRadians);
         GfVec3f wI = light.xform.TransformDir(localDir);
+        wI.Normalize();
         float vis = _Visibility(position, wI);
 
-        return light.luminance * std::max(0.0f, GfDot(wI, normal)) * vis / (pdf * M_PI);
+        return light.luminance * std::max(0.0f, GfDot(wI, normal)) * vis / pdf;
     }
     else
     {
         // delta case, infinite pdf
         GfVec3f wI = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, 1.0f));
+        wI.Normalize();
         float vis = _Visibility(position, wI);
-        return light.luminance * std::max(0.0f, GfDot(wI, normal)) * vis / M_PI;
+        return light.luminance * std::max(0.0f, GfDot(wI, normal)) * vis;
     }
 }
+
+    // Evaluate rect light constribution
+GfVec3f HdEmbreeRenderer::_EvalRectLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, pcg32_random_t& pcgState)
+{
+    GfVec3f lightPoint(
+        (uniformFloat(pcgState) - 0.5f) * light.rect.width,
+        (uniformFloat(pcgState) - 0.5f) * light.rect.height,
+        0.0f
+    );
+
+    GfVec3f worldPoint = light.xform.Transform(lightPoint);
+    GfVec3f wI = worldPoint - position;
+    float dist = wI.GetLength();
+    wI /= dist;
+    float vis = _Visibility(position, wI, dist);
+
+    GfVec3f lightNormal = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, -1.0f));
+    lightNormal.Normalize();
+
+    return light.luminance 
+            * std::max(0.0f, GfDot(wI, normal)) 
+            * (light.rect.width * light.rect.height) / (dist*dist)
+            * std::max(0.0f, GfDot(-wI, lightNormal))
+            * vis;
+}
+
 
 GfVec4f
 HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
@@ -1027,7 +1070,12 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
             switch (light.kind)
             {
             case LightKind::Distant:
-                finalColor += _EvalDistantLight(light, hitPos, normal, pcgState) * reflectivity;
+                finalColor += _EvalDistantLight(light, hitPos, normal, pcgState) 
+                    * reflectivity / M_PI;
+                break;
+            case LightKind::Rect:
+                finalColor += _EvalRectLight(light, hitPos, normal, pcgState) 
+                    * reflectivity / M_PI;
                 break;
             }
         }

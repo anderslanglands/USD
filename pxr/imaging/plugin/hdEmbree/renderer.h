@@ -179,6 +179,12 @@ private:
                               GfVec3f const& normal, 
                               pcg32_random_t& pcgState);
 
+    // Evaluate rect light constribution
+    GfVec3f _EvalRectLight(Light const& light, 
+                              GfVec3f const& position, 
+                              GfVec3f const& normal, 
+                              pcg32_random_t& pcgState);
+
     // The bound aovs for this renderer.
     HdRenderPassAovBindingVector _aovBindings;
     // Parsed AOV name tokens.
