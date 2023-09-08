@@ -951,13 +951,12 @@ GfVec3f HdEmbreeRenderer::_EvalRectLight(Light const& light, GfVec3f const& posi
     lightNormal.Normalize();
 
     const float area = light.rect.width * light.rect.height;
-    const float pdf = 1.0f / area;
-    const float g = 1.0f / (dist*dist);
+    const float pdf_a = 1.0f / area;
+    const float transform_pdf = std::max(0.0f, GfDot(-wI, lightNormal)) / (dist*dist);
 
-    return light.luminance / pdf
+    return light.luminance
+            * transform_pdf / pdf_a
             * std::max(0.0f, GfDot(wI, normal)) 
-            * std::max(0.0f, GfDot(-wI, lightNormal))
-            * g
             * vis;
 }
 
@@ -969,7 +968,7 @@ GfVec3f SampleUniformSphere(float u1, float u2) {
     return {r * std::cos(phi), r * std::sin(phi), z};
 }
 
-// Evaluate rect light constribution
+// Evaluate rect light contribution
 GfVec3f HdEmbreeRenderer::_EvalSphereLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
 {
     GfVec3f lightPoint = SampleUniformSphere(pcg.uniform(), pcg.uniform()) * light.sphere.radius;
@@ -984,13 +983,12 @@ GfVec3f HdEmbreeRenderer::_EvalSphereLight(Light const& light, GfVec3f const& po
     lightNormal.Normalize();
 
     const float area = 4 * M_PI * light.sphere.radius * light.sphere.radius;
-    const float pdf = 1.0f / area;
-    const float g = 1.0f / (dist*dist);
+    const float pdf_a = 1.0f / area;
+    const float transform_pdf = std::max(0.0f, GfDot(-wI, lightNormal)) / (dist*dist);
 
-    return light.luminance / pdf
+    return light.luminance
+            * transform_pdf / pdf_a
             * std::max(0.0f, GfDot(wI, normal)) 
-            * std::max(0.0f, GfDot(-wI, lightNormal))
-            * g
             * vis;
 }
 
