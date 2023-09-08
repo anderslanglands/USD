@@ -79,10 +79,6 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
             float sinTheta = GfSin(light.distant.halfAngleRadians);
             light.luminance *= 1.0f / (sinTheta*sinTheta);
         }
-        else
-        {
-            light.luminance *= M_PI;
-        }
     }
 
   } else if (_lightType == HdSprimTypeTokens->domeLight) {
@@ -112,6 +108,14 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
         sceneDelegate->GetLightParamValue(id, HdLightTokens->radius)
             .Get<float>(),
     };
+
+    if (sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize).Get<bool>()) {
+        // Normalize by surface area
+        /// XXX: this should be an ellipsoid
+        GfVec3f R(light.sphere.radius, 0.0f, 0.0f);
+        float r = R.GetLength();
+        light.luminance /= 4 * M_PI * r*r;
+    }
   }
 
   HdEmbreeRenderer *renderer =

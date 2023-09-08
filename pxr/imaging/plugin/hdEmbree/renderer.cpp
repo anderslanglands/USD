@@ -42,6 +42,7 @@
 #include <chrono>
 #include <limits>
 #include <random>
+#include <stdint.h>
 #include <thread>
 
 PXR_NAMESPACE_OPEN_SCOPE
@@ -509,13 +510,6 @@ HdEmbreeRenderer::Render(HdRenderThread *renderThread)
     }
 }
 
-/// XXX: Taken from PBRT
-float uniformFloat(pcg32_random_t& pcgState)
-{
-    unsigned u = pcg32_random_r(&pcgState);
-    return fminf(float(0x1.fffffep-1), u * 0x1p-32f);
-}
-
 void
 HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
                                 int progression,
@@ -542,7 +536,7 @@ HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
         (_dataWindow.GetWidth() + tileSize-1) / tileSize;
 
     // Random number state for this thread
-    pcg32_random_t pcgState;
+    thread_local PCG pcg(std::hash<std::thread::id>()(std::this_thread::get_id()));
 
     // _RenderTiles gets a range of tiles; iterate through them.
     for (unsigned int tile = tileStart; tile < tileEnd; ++tile) {
@@ -566,34 +560,10 @@ HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
         // Loop over pixels casting rays.
         for (unsigned int y = y0; y < y1; ++y) {
             for (unsigned int x = x0; x < x1; ++x) {
-
-                // Initialize the PCG stream with the pixel index, and offset
-                // this progression within that stream. The magic number here is
-                // just some number that is bigger than the maximum number of numbers we 
-                // expect to generate along a single path to keep the sequences from 
-                // overlapping
-                unsigned int pixelIndex = y * _width + x;
-                // XXX: This is correlated slightly
-                // pcg32_srandom_r(&pcgState, progression * _samplesToConvergence * 251 * _width * _height, 13 + pixelIndex * 7);
-
-                unsigned z = progression;
-                unsigned depth = _samplesToConvergence;
-
-                unsigned yy = pixelIndex;
-                unsigned height = _width * _height;
-
-                unsigned xx = 0;
-                unsigned width = 128;
-
-                pcg32_srandom_r(&pcgState, 
-                    yy * width * z * (depth * width),
-                    0xdeadbeef
-                );
-
                 // Jitter the camera ray direction.
                 GfVec2f jitter(0.0f, 0.0f);
                 if (HdEmbreeConfig::GetInstance().jitterCamera) {
-                    jitter = GfVec2f(uniformFloat(pcgState), uniformFloat(pcgState));
+                    jitter = GfVec2f(pcg.uniform(), pcg.uniform());
                 }
 
                 // Un-transform the pixel's NDC coordinates through the
@@ -629,7 +599,7 @@ HdEmbreeRenderer::_RenderTiles(HdRenderThread *renderThread,
                 dir = _inverseViewMatrix.TransformDir(dir).GetNormalized();
 
                 // Trace the ray.
-                _TraceRay(x, y, origin, dir, pcgState);
+                _TraceRay(x, y, origin, dir, pcg);
             }
         }
     }
@@ -691,7 +661,7 @@ _CosineWeightedDirection(GfVec2f const& uniform_float)
 void
 HdEmbreeRenderer::_TraceRay(unsigned int x, unsigned int y,
                             GfVec3f const &origin, GfVec3f const &dir,
-                            pcg32_random_t& pcgState)
+                            PCG& pcg)
 {
     // Intersect the camera ray.
     RTCRayHit rayHit; // EMBREE_FIXME: use RTCRay for occlusion rays
@@ -728,7 +698,7 @@ HdEmbreeRenderer::_TraceRay(unsigned int x, unsigned int y,
 
         if (_aovNames[i].name == HdAovTokens->color) {
             GfVec4f clearColor = _GetClearColor(_aovBindings[i].clearValue);
-            GfVec4f sample = _ComputeColor(rayHit, pcgState, clearColor);
+            GfVec4f sample = _ComputeColor(rayHit, pcg, clearColor);
             renderBuffer->Write(GfVec3i(x,y,1), 4, sample.data());
         } else if ((_aovNames[i].name == HdAovTokens->cameraDepth ||
                     _aovNames[i].name == HdAovTokens->depth) &&
@@ -939,12 +909,12 @@ float HdEmbreeRenderer::_Visibility(GfVec3f const& position, GfVec3f const& dire
     return shadow.tfar > 0.0f;
 }
 
-GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, pcg32_random_t& pcgState)
+GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
 {
     if (light.distant.halfAngleRadians > 0.0f)
     {
         // There's an implicit double-negation of the wI direction here
-        GfVec3f localDir = SampleUniformCone(GfVec2f(uniformFloat(pcgState), uniformFloat(pcgState)), light.distant.halfAngleRadians);
+        GfVec3f localDir = SampleUniformCone(GfVec2f(pcg.uniform(), pcg.uniform()), light.distant.halfAngleRadians);
         float pdf = UniformConePDF(light.distant.halfAngleRadians);
         GfVec3f wI = light.xform.TransformDir(localDir);
         wI.Normalize();
@@ -962,12 +932,12 @@ GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& p
     }
 }
 
-    // Evaluate rect light constribution
-GfVec3f HdEmbreeRenderer::_EvalRectLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, pcg32_random_t& pcgState)
+// Evaluate rect light constribution
+GfVec3f HdEmbreeRenderer::_EvalRectLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
 {
     GfVec3f lightPoint(
-        (uniformFloat(pcgState) - 0.5f) * light.rect.width,
-        (uniformFloat(pcgState) - 0.5f) * light.rect.height,
+        (pcg.uniform() - 0.5f) * light.rect.width,
+        (pcg.uniform() - 0.5f) * light.rect.height,
         0.0f
     );
 
@@ -980,17 +950,53 @@ GfVec3f HdEmbreeRenderer::_EvalRectLight(Light const& light, GfVec3f const& posi
     GfVec3f lightNormal = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, -1.0f));
     lightNormal.Normalize();
 
-    return light.luminance 
+    const float area = light.rect.width * light.rect.height;
+    const float pdf = 1.0f / area;
+    const float g = 1.0f / (dist*dist);
+
+    return light.luminance / pdf
             * std::max(0.0f, GfDot(wI, normal)) 
-            * (light.rect.width * light.rect.height) / (dist*dist)
             * std::max(0.0f, GfDot(-wI, lightNormal))
+            * g
             * vis;
 }
 
+// XXX: from PBRT
+GfVec3f SampleUniformSphere(float u1, float u2) {
+    float z = 1 - 2 * u1;
+    float r = sqrtf(std::max(0.0f, 1 - z*z));
+    float phi = 2 * M_PI * u2;
+    return {r * std::cos(phi), r * std::sin(phi), z};
+}
+
+// Evaluate rect light constribution
+GfVec3f HdEmbreeRenderer::_EvalSphereLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
+{
+    GfVec3f lightPoint = SampleUniformSphere(pcg.uniform(), pcg.uniform()) * light.sphere.radius;
+
+    GfVec3f worldPoint = light.xform.Transform(lightPoint);
+    GfVec3f wI = worldPoint - position;
+    float dist = wI.GetLength();
+    wI /= dist;
+    float vis = _Visibility(position, wI, dist);
+
+    GfVec3f lightNormal = light.xform.TransformDir(lightPoint);
+    lightNormal.Normalize();
+
+    const float area = 4 * M_PI * light.sphere.radius * light.sphere.radius;
+    const float pdf = 1.0f / area;
+    const float g = 1.0f / (dist*dist);
+
+    return light.luminance / pdf
+            * std::max(0.0f, GfDot(wI, normal)) 
+            * std::max(0.0f, GfDot(-wI, lightNormal))
+            * g
+            * vis;
+}
 
 GfVec4f
 HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
-                                pcg32_random_t& pcgState,
+                                PCG& pcg,
                                 GfVec4f const& clearColor)
 {
     if (rayHit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
@@ -1052,7 +1058,7 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
 
         // Lighting gets modulated by an ambient occlusion term.
         float aoLightIntensity =
-            _ComputeAmbientOcclusion(hitPos, normal, pcgState);
+            _ComputeAmbientOcclusion(hitPos, normal, pcg);
 
         // XXX: We should support opacity here...
 
@@ -1070,11 +1076,15 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
             switch (light.kind)
             {
             case LightKind::Distant:
-                finalColor += _EvalDistantLight(light, hitPos, normal, pcgState) 
+                finalColor += _EvalDistantLight(light, hitPos, normal, pcg) 
                     * reflectivity / M_PI;
                 break;
             case LightKind::Rect:
-                finalColor += _EvalRectLight(light, hitPos, normal, pcgState) 
+                finalColor += _EvalRectLight(light, hitPos, normal, pcg) 
+                    * reflectivity / M_PI;
+                break;
+            case LightKind::Sphere:
+                finalColor += _EvalSphereLight(light, hitPos, normal, pcg) 
                     * reflectivity / M_PI;
                 break;
             }
@@ -1093,7 +1103,7 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
 float
 HdEmbreeRenderer::_ComputeAmbientOcclusion(GfVec3f const& position,
                                            GfVec3f const& normal,
-                                           pcg32_random_t& pcgState)
+                                           PCG& pcg)
 {
     // 0 ambient occlusion samples means disable the ambient occlusion term.
     if (_ambientOcclusionSamples < 1) {
@@ -1126,17 +1136,17 @@ HdEmbreeRenderer::_ComputeAmbientOcclusion(GfVec3f const& position,
     std::vector<GfVec2f> samples;
     samples.resize(_ambientOcclusionSamples);
     // for (int i = 0; i < _ambientOcclusionSamples; ++i) {
-    //     samples[i][0] = (float(i) + uniformFloat(pcgState)) / _ambientOcclusionSamples;
+    //     samples[i][0] = (float(i) + pcg.uniform()) / _ambientOcclusionSamples;
     // }
     // std::shuffle(samples.begin(), samples.end(), random);
     // for (int i = 0; i < _ambientOcclusionSamples; ++i) {
-    //     samples[i][1] = (float(i) + uniformFloat(pcgState)) / _ambientOcclusionSamples;
+    //     samples[i][1] = (float(i) + pcg.uniform()) / _ambientOcclusionSamples;
     // }
 
     /// XXX: Do stratified here
     for (int i = 0; i < _ambientOcclusionSamples; ++i) {
-        samples[i][0] = uniformFloat(pcgState);
-        samples[i][1] = uniformFloat(pcgState);
+        samples[i][0] = pcg.uniform();
+        samples[i][1] = pcg.uniform();
     }
 
     // Trace ambient occlusion rays. The occlusion factor is the fraction of

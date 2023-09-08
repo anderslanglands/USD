@@ -41,6 +41,25 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
+class PCG
+{
+    pcg32_random_t _state;
+
+public:
+    PCG(uint64_t seed) {
+        pcg32_srandom_r(&_state, seed, 17);
+    }
+
+    uint32_t next() {
+        return pcg32_random_r(&_state);
+    }
+
+    float uniform() {
+        /// XXX: Taken from PBRT
+        return fminf(float(0x1.fffffep-1), next() * 0x1p-32f);
+    }
+};
+
 /// \class HdEmbreeRenderer
 ///
 /// HdEmbreeRenderer implements a renderer on top of Embree's raycasting
@@ -144,11 +163,11 @@ private:
     // aov buffers.
     void _TraceRay(unsigned int x, unsigned int y,
                    GfVec3f const& origin, GfVec3f const& dir,
-                   pcg32_random_t& pcgState);
+                   PCG& pcg);
 
     // Compute the color at the given ray hit.
     GfVec4f _ComputeColor(RTCRayHit const& rayHit,
-                          pcg32_random_t& pcgState,
+                          PCG& pcg,
                           GfVec4f const& clearColor);
     // Compute the depth at the given ray hit.
     bool _ComputeDepth(RTCRayHit const& rayHit, float *depth, bool clip);
@@ -168,22 +187,28 @@ private:
     // the light contribution of an infinitely far, pure white dome light.
     float _ComputeAmbientOcclusion(GfVec3f const& position,
                                    GfVec3f const& normal,
-                                   pcg32_random_t& pcgState);
+                                   PCG& pcg);
 
     // Return the visibility from `position` along `direction`
     float _Visibility(GfVec3f const& position, GfVec3f const& direction, float offset = 1.0e-3f);
 
-    // Evaluate distant light constribution
+    // Evaluate distant light contribution
     GfVec3f _EvalDistantLight(Light const& light, 
                               GfVec3f const& position, 
                               GfVec3f const& normal, 
-                              pcg32_random_t& pcgState);
+                              PCG& pcg);
 
-    // Evaluate rect light constribution
+    // Evaluate rect light contribution
     GfVec3f _EvalRectLight(Light const& light, 
                               GfVec3f const& position, 
                               GfVec3f const& normal, 
-                              pcg32_random_t& pcgState);
+                              PCG& pcg);
+
+    // Evaluate rect light contribution
+    GfVec3f _EvalSphereLight(Light const& light, 
+                              GfVec3f const& position, 
+                              GfVec3f const& normal, 
+                              PCG& pcg);
 
     // The bound aovs for this renderer.
     HdRenderPassAovBindingVector _aovBindings;
