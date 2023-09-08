@@ -76,8 +76,8 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
         // meaningful unit
         if (light.distant.halfAngleRadians > 0.0f)
         {
-            float sinTheta = GfSin(light.distant.halfAngleRadians);
-            light.luminance *= 1.0f / (sinTheta*sinTheta);
+            float sinTheta = sinf(light.distant.halfAngleRadians);
+            light.luminance *= 1.0f / (sinTheta*sinTheta*M_PI);
         }
     }
 
