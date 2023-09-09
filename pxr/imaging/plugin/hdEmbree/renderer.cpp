@@ -970,7 +970,7 @@ ShapeSample SampleRect(GfMatrix4f const& xf, float width, float height, float u1
 
     // Transform to world space
     const GfVec3f pWorld = xf.Transform(pLight);
-    const GfVec3f nWorld = xf.TransformDir(nLight);
+    const GfVec3f nWorld = xf.TransformDir(nLight).GetNormalized();
 
     // Calculate area
     const GfVec3f U = xf.TransformDir(GfVec3f{width, 0.0f, 0.0f});
@@ -997,7 +997,7 @@ ShapeSample SampleSphere(GfMatrix4f const& xf, float radius, float u1, float u2)
 
     // Transform to world space
     const GfVec3f pWorld = xf.Transform(pLight);
-    const GfVec3f nWorld = xf.TransformDir(nLight);
+    const GfVec3f nWorld = xf.TransformDir(nLight).GetNormalized();
 
     // Calculate surface area of the ellipsoid
     const float a = xf.TransformDir(GfVec3f{radius, 0.0f, 0.0f}).GetLength();
@@ -1028,7 +1028,7 @@ ShapeSample SampleDisk(GfMatrix4f const& xf, float radius, float u1, float u2) {
 
     // Transform to world space
     const GfVec3f pWorld = xf.Transform(pLight);
-    const GfVec3f nWorld = xf.TransformDir(nLight);
+    const GfVec3f nWorld = xf.TransformDir(nLight).GetNormalized();
 
     // Calculate surface area of the ellipse
     const float a = xf.TransformDir(GfVec3f{radius, 0.0f, 0.0f}).GetLength();
@@ -1058,7 +1058,7 @@ ShapeSample SampleCylinder(GfMatrix4f const& xf, float radius, float length, flo
 
     // Transform to world space
     const GfVec3f pWorld = xf.Transform(pLight);
-    const GfVec3f nWorld = xf.TransformDir(nLight);
+    const GfVec3f nWorld = xf.TransformDir(nLight).GetNormalized();
 
     const float c = xf.TransformDir(GfVec3f{length, 0.0f, 0.0f}).GetLength();
     const float a = xf.TransformDir(GfVec3f{0.0f, radius, 0.0f}).GetLength();
