@@ -210,6 +210,16 @@ private:
                               GfVec3f const& normal, 
                               PCG& pcg);
 
+    GfVec3f _EvalDiskLight(Light const& light, 
+                              GfVec3f const& position, 
+                              GfVec3f const& normal, 
+                              PCG& pcg);
+
+    GfVec3f _EvalCylinderLight(Light const& light, 
+                              GfVec3f const& position, 
+                              GfVec3f const& normal, 
+                              PCG& pcg);
+
     // The bound aovs for this renderer.
     HdRenderPassAovBindingVector _aovBindings;
     // Parsed AOV name tokens.

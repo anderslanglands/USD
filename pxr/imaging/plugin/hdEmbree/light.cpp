@@ -94,7 +94,7 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
     };
 
     if (sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize).Get<bool>()) {
-        // Normalize by surface area
+        // Normalize by surface area... there's probably a smarter way of doing this
         GfVec3f U(light.rect.width, 0.0f, 0.0f);
         GfVec3f V(0.0f, light.rect.height, 0.0f);
         U = light.xform.TransformDir(U);
@@ -116,6 +116,11 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
         float r = R.GetLength();
         light.luminance /= 4 * M_PI * r*r;
     }
+  } else if (_lightType == HdSprimTypeTokens->diskLight) {
+    light.kind = LightKind::Disk;
+    light.disk = {
+        sceneDelegate->GetLightParamValue(id, HdLightTokens->radius).Get<float>()
+    };
   }
 
   HdEmbreeRenderer *renderer =

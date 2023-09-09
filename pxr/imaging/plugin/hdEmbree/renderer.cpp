@@ -872,6 +872,13 @@ HdEmbreeRenderer::_ComputePrimvar(RTCRayHit const& rayHit,
     return false;
 }
 
+struct LightShapeSample {
+    GfVec3f pWorld;
+    GfVec3f nWorld;
+    GfVec2f uv;
+    float pdf;
+};
+
 // XXX: ported from PBRT
 static GfVec3f SphericalDirection(float sinTheta, float cosTheta,
                                                 float phi) {
@@ -968,6 +975,12 @@ GfVec3f SampleUniformSphere(float u1, float u2) {
     return {r * std::cos(phi), r * std::sin(phi), z};
 }
 
+GfVec3f SampleUniformDisk(float u1, float u2, float radius) {
+    float r = sqrtf(u1) * radius;
+    float theta = 2 * M_PI * u2;
+    return GfVec3f(r * cosf(theta), r * sinf(theta), 0.0f);
+}
+
 // Evaluate rect light contribution
 GfVec3f HdEmbreeRenderer::_EvalSphereLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
 {
@@ -982,7 +995,75 @@ GfVec3f HdEmbreeRenderer::_EvalSphereLight(Light const& light, GfVec3f const& po
     GfVec3f lightNormal = light.xform.TransformDir(lightPoint);
     lightNormal.Normalize();
 
+    /// XXX: handle scaling
     const float area = 4 * M_PI * light.sphere.radius * light.sphere.radius;
+    const float pdf_a = 1.0f / area;
+    const float transform_pdf = std::max(0.0f, GfDot(-wI, lightNormal)) / (dist*dist);
+
+    return light.luminance
+            * transform_pdf / pdf_a
+            * std::max(0.0f, GfDot(wI, normal)) 
+            * vis;
+}
+
+GfVec3f HdEmbreeRenderer::_EvalDiskLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
+{
+    GfVec3f lightPoint = SampleUniformDisk(pcg.uniform(), pcg.uniform(), light.disk.radius);
+
+    GfVec3f worldPoint = light.xform.Transform(lightPoint);
+    GfVec3f wI = worldPoint - position;
+    float dist = wI.GetLength();
+    wI /= dist;
+    float vis = _Visibility(position, wI, dist);
+
+    GfVec3f lightNormal = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, -1.0f));
+    lightNormal.Normalize();
+
+    const float area = M_PI * light.disk.radius * light.disk.radius;
+    const float pdf_a = 1.0f / area;
+    const float transform_pdf = std::max(0.0f, GfDot(-wI, lightNormal)) / (dist*dist);
+
+    return light.luminance
+            * transform_pdf / pdf_a
+            * std::max(0.0f, GfDot(wI, normal)) 
+            * vis;
+}
+
+float lerp(float a, float b, float t) {
+    return (1-t)*a + t*b;
+}
+
+float sqr(float x) {
+    return x*x;
+}
+
+GfVec3f SampleCylinder(float u1, float u2, float radius, float length) {
+    float z = lerp(-length/2, length/2, u1);
+    float phi = u2 * 2 * M_PI;
+    // Compute cylinder sample position _pi_ and normal _n_ from $z$ and $\phi$
+    GfVec3f pObj = GfVec3f(z, radius * cosf(phi), radius * sinf(phi));
+    // Reproject _pObj_ to cylinder surface and compute _pObjError_
+    float hitRad = sqrtf(sqr(pObj[1]) + sqr(pObj[2]));
+    pObj[1] *= radius / hitRad;
+    pObj[2] *= radius / hitRad;
+
+    return pObj;
+}
+
+GfVec3f HdEmbreeRenderer::_EvalCylinderLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
+{
+    GfVec3f lightPoint = SampleCylinder(pcg.uniform(), pcg.uniform(), light.cylinder.radius, light.cylinder.length);
+
+    GfVec3f worldPoint = light.xform.Transform(lightPoint);
+    GfVec3f wI = worldPoint - position;
+    float dist = wI.GetLength();
+    wI /= dist;
+    float vis = _Visibility(position, wI, dist);
+
+    GfVec3f lightNormal = light.xform.TransformDir(GfVec3f(0.0f, lightPoint[1], lightPoint[2]));
+    lightNormal.Normalize();
+
+    const float area = 2 * M_PI * light.cylinder.radius * light.cylinder.length;
     const float pdf_a = 1.0f / area;
     const float transform_pdf = std::max(0.0f, GfDot(-wI, lightNormal)) / (dist*dist);
 
@@ -1065,25 +1146,29 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
     }
     else
     {
-        /// XXX: Switch this out for 1.0f once we've updated all renderer images to match
-        /// reason being it will be much easier to debug implementations if we remove surface
-        /// effects from the equation
-        float reflectivity = 1.0f;
+        float brdf = 1.0f / M_PI;
         for (auto const& light: _lights)
         {
             switch (light.kind)
             {
             case LightKind::Distant:
                 finalColor += _EvalDistantLight(light, hitPos, normal, pcg) 
-                    * reflectivity / M_PI;
+                    * brdf;
                 break;
             case LightKind::Rect:
                 finalColor += _EvalRectLight(light, hitPos, normal, pcg) 
-                    * reflectivity / M_PI;
+                    * brdf;
                 break;
             case LightKind::Sphere:
                 finalColor += _EvalSphereLight(light, hitPos, normal, pcg) 
-                    * reflectivity / M_PI;
+                    * brdf;
+                break;
+            case LightKind::Disk:
+                finalColor += _EvalDiskLight(light, hitPos, normal, pcg) 
+                    * brdf;
+            case LightKind::Cylinder:
+                finalColor += _EvalCylinderLight(light, hitPos, normal, pcg) 
+                    * brdf;
                 break;
             }
         }
