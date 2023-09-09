@@ -872,12 +872,31 @@ HdEmbreeRenderer::_ComputePrimvar(RTCRayHit const& rayHit,
     return false;
 }
 
-struct LightShapeSample {
+struct ShapeSample {
     GfVec3f pWorld;
     GfVec3f nWorld;
     GfVec2f uv;
-    float pdf;
+    float pdfA;
 };
+
+struct LightSample {
+    GfVec3f Li;
+    GfVec3f wI;
+    float dist;
+    float invPdfW;
+};
+
+float lerp(float a, float b, float t) {
+    return (1-t)*a + t*b;
+}
+
+float sqr(float x) {
+    return x*x;
+}
+
+float posdot(GfVec3f a, GfVec3f b) {
+    return std::max(0.0f, GfDot(a, b));
+}
 
 // XXX: ported from PBRT
 static GfVec3f SphericalDirection(float sinTheta, float cosTheta,
@@ -939,138 +958,158 @@ GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& p
     }
 }
 
-// Evaluate rect light constribution
-GfVec3f HdEmbreeRenderer::_EvalRectLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
-{
-    GfVec3f lightPoint(
-        (pcg.uniform() - 0.5f) * light.rect.width,
-        (pcg.uniform() - 0.5f) * light.rect.height,
-        0.0f
+ShapeSample SampleRect(GfMatrix4f const& xf, float width, float height, float u1, float u2) {
+    // Sample rectangle in object space
+    const GfVec3f pLight(
+      (u1 - 0.5f) * width,  
+      (u2 - 0.5f) * height,  
+      0.0f
     );
+    const GfVec3f nLight(0.0f, 0.0f, -1.0f);
+    const GfVec2f uv(u1, u2);
 
-    GfVec3f worldPoint = light.xform.Transform(lightPoint);
-    GfVec3f wI = worldPoint - position;
-    float dist = wI.GetLength();
-    wI /= dist;
-    float vis = _Visibility(position, wI, dist);
+    // Transform to world space
+    const GfVec3f pWorld = xf.Transform(pLight);
+    const GfVec3f nWorld = xf.TransformDir(nLight);
 
-    GfVec3f lightNormal = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, -1.0f));
-    lightNormal.Normalize();
+    // Calculate area
+    const GfVec3f U = xf.TransformDir(GfVec3f{width, 0.0f, 0.0f});
+    const GfVec3f V = xf.TransformDir(GfVec3f{0.0f, height, 0.0f});
+    const float area = GfCross(U, V).GetLength();
 
-    const float area = light.rect.width * light.rect.height;
-    const float pdf_a = 1.0f / area;
-    const float transform_pdf = std::max(0.0f, GfDot(-wI, lightNormal)) / (dist*dist);
-
-    return light.luminance
-            * transform_pdf / pdf_a
-            * std::max(0.0f, GfDot(wI, normal)) 
-            * vis;
+    return ShapeSample {
+        pWorld,
+        nWorld,
+        uv,
+        1.0f / area
+    };
 }
 
-// XXX: from PBRT
-GfVec3f SampleUniformSphere(float u1, float u2) {
-    float z = 1 - 2 * u1;
-    float r = sqrtf(std::max(0.0f, 1 - z*z));
-    float phi = 2 * M_PI * u2;
-    return {r * std::cos(phi), r * std::sin(phi), z};
+ShapeSample SampleSphere(GfMatrix4f const& xf, float radius, float u1, float u2) {
+    // Sample sphere in light space
+    const float z = 1 - 2 * u1;
+    const float r = sqrtf(std::max(0.0f, 1 - z*z));
+    const float phi = 2 * M_PI * u2;
+    GfVec3f pLight{r * std::cos(phi), r * std::sin(phi), z};
+    const GfVec3f nLight = pLight;
+    pLight *= radius;
+    const GfVec2f uv(u2, z);
+
+    // Transform to world space
+    const GfVec3f pWorld = xf.Transform(pLight);
+    const GfVec3f nWorld = xf.TransformDir(nLight);
+
+    // Calculate surface area of the ellipsoid
+    const float a = xf.TransformDir(GfVec3f{radius, 0.0f, 0.0f}).GetLength();
+    const float b = xf.TransformDir(GfVec3f{0.0f, radius, 0.0f}).GetLength();
+    const float c = xf.TransformDir(GfVec3f{0.0f, 0.0f, radius}).GetLength();
+    const float ab = powf(a*b, 1.6f);
+    const float ac = powf(a*c, 1.6f);
+    const float bc = powf(b*c, 1.6f);
+    const float area = powf((ab + ac + bc)/3, 1/1.6f) * 4 * M_PI;
+
+    return ShapeSample {
+        pWorld,
+        nWorld,
+        uv,
+        1.0f / area
+    };
 }
 
-GfVec3f SampleUniformDisk(float u1, float u2, float radius) {
-    float r = sqrtf(u1) * radius;
-    float theta = 2 * M_PI * u2;
-    return GfVec3f(r * cosf(theta), r * sinf(theta), 0.0f);
+
+ShapeSample SampleDisk(GfMatrix4f const& xf, float radius, float u1, float u2) {
+    // Sample disk in light space
+    const float r = sqrtf(u1);
+    const float theta = 2 * M_PI * u2;
+    GfVec3f pLight(r * cosf(theta), r * sinf(theta), 0.0f);
+    const GfVec3f nLight(0.0f, 0.0f, -1.0f);
+    const GfVec2f uv(pLight[0], pLight[1]);
+    pLight *= radius;
+
+    // Transform to world space
+    const GfVec3f pWorld = xf.Transform(pLight);
+    const GfVec3f nWorld = xf.TransformDir(nLight);
+
+    // Calculate surface area of the ellipse
+    const float a = xf.TransformDir(GfVec3f{radius, 0.0f, 0.0f}).GetLength();
+    const float b = xf.TransformDir(GfVec3f{0.0f, radius, 0.0f}).GetLength();
+    const float area = M_PI * a * b;
+
+    return ShapeSample {
+        pWorld,
+        nWorld,
+        uv,
+        1.0f / area
+    };
 }
 
-// Evaluate rect light contribution
-GfVec3f HdEmbreeRenderer::_EvalSphereLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
-{
-    GfVec3f lightPoint = SampleUniformSphere(pcg.uniform(), pcg.uniform()) * light.sphere.radius;
-
-    GfVec3f worldPoint = light.xform.Transform(lightPoint);
-    GfVec3f wI = worldPoint - position;
-    float dist = wI.GetLength();
-    wI /= dist;
-    float vis = _Visibility(position, wI, dist);
-
-    GfVec3f lightNormal = light.xform.TransformDir(lightPoint);
-    lightNormal.Normalize();
-
-    /// XXX: handle scaling
-    const float area = 4 * M_PI * light.sphere.radius * light.sphere.radius;
-    const float pdf_a = 1.0f / area;
-    const float transform_pdf = std::max(0.0f, GfDot(-wI, lightNormal)) / (dist*dist);
-
-    return light.luminance
-            * transform_pdf / pdf_a
-            * std::max(0.0f, GfDot(wI, normal)) 
-            * vis;
-}
-
-GfVec3f HdEmbreeRenderer::_EvalDiskLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
-{
-    GfVec3f lightPoint = SampleUniformDisk(pcg.uniform(), pcg.uniform(), light.disk.radius);
-
-    GfVec3f worldPoint = light.xform.Transform(lightPoint);
-    GfVec3f wI = worldPoint - position;
-    float dist = wI.GetLength();
-    wI /= dist;
-    float vis = _Visibility(position, wI, dist);
-
-    GfVec3f lightNormal = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, -1.0f));
-    lightNormal.Normalize();
-
-    const float area = M_PI * light.disk.radius * light.disk.radius;
-    const float pdf_a = 1.0f / area;
-    const float transform_pdf = std::max(0.0f, GfDot(-wI, lightNormal)) / (dist*dist);
-
-    return light.luminance
-            * transform_pdf / pdf_a
-            * std::max(0.0f, GfDot(wI, normal)) 
-            * vis;
-}
-
-float lerp(float a, float b, float t) {
-    return (1-t)*a + t*b;
-}
-
-float sqr(float x) {
-    return x*x;
-}
-
-GfVec3f SampleCylinder(float u1, float u2, float radius, float length) {
+ShapeSample SampleCylinder(GfMatrix4f const& xf, float radius, float length, float u1, float u2) {
     float z = lerp(-length/2, length/2, u1);
     float phi = u2 * 2 * M_PI;
     // Compute cylinder sample position _pi_ and normal _n_ from $z$ and $\phi$
-    GfVec3f pObj = GfVec3f(z, radius * cosf(phi), radius * sinf(phi));
+    GfVec3f pLight = GfVec3f(z, radius * cosf(phi), radius * sinf(phi));
     // Reproject _pObj_ to cylinder surface and compute _pObjError_
-    float hitRad = sqrtf(sqr(pObj[1]) + sqr(pObj[2]));
-    pObj[1] *= radius / hitRad;
-    pObj[2] *= radius / hitRad;
+    float hitRad = sqrtf(sqr(pLight[1]) + sqr(pLight[2]));
+    pLight[1] *= radius / hitRad;
+    pLight[2] *= radius / hitRad;
 
-    return pObj;
+    GfVec3f nLight(0.0f, pLight[1], pLight[2]);
+    nLight.Normalize();
+
+    // Transform to world space
+    const GfVec3f pWorld = xf.Transform(pLight);
+    const GfVec3f nWorld = xf.TransformDir(nLight);
+
+    const float c = xf.TransformDir(GfVec3f{length, 0.0f, 0.0f}).GetLength();
+    const float a = xf.TransformDir(GfVec3f{0.0f, radius, 0.0f}).GetLength();
+    const float b = xf.TransformDir(GfVec3f{0.0f, 0.0f, radius}).GetLength();
+    // Ramanujan's approximation to perimeter of ellipse
+    const float e = M_PI * (3*(a+b) - sqrtf((3*a + b) * (a + 3*b)));
+    const float area = e * c;
+
+    return ShapeSample {
+        pWorld,
+        nWorld,
+        GfVec2f(u2, u1),
+        1.0f / area
+    };
 }
 
-GfVec3f HdEmbreeRenderer::_EvalCylinderLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
-{
-    GfVec3f lightPoint = SampleCylinder(pcg.uniform(), pcg.uniform(), light.cylinder.radius, light.cylinder.length);
+LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u1, float u2) {
+    // First, sample the shape of the area light in its surface area measure
+    ShapeSample ss;
+    switch (light.kind) {
+    case LightKind::Rect:
+        ss = SampleRect(light.xform, light.rect.width, light.rect.height, u1, u2);
+        break;
+    case LightKind::Sphere:
+        ss = SampleSphere(light.xform, light.sphere.radius, u1, u2);
+        break;
+    case LightKind::Disk:
+        ss = SampleDisk(light.xform, light.disk.radius, u1, u2);
+        break;
+    case LightKind::Cylinder:
+        ss = SampleCylinder(light.xform, light.cylinder.radius, light.cylinder.length, u1, u2);
+        break;
+    case LightKind::Distant:
+    case LightKind::Dome:
+        // infinite lights handled separately
+        break;
+    }
 
-    GfVec3f worldPoint = light.xform.Transform(lightPoint);
-    GfVec3f wI = worldPoint - position;
+    // Transform PDF from area measure to solid angle measure. We use the inverse PDF
+    // here to avoid division by zero when the surface point is behind the light
+    GfVec3f wI = ss.pWorld - position;
     float dist = wI.GetLength();
     wI /= dist;
-    float vis = _Visibility(position, wI, dist);
+    float invPdfW = posdot(-wI, ss.nWorld) / sqr(dist) / ss.pdfA;
 
-    GfVec3f lightNormal = light.xform.TransformDir(GfVec3f(0.0f, lightPoint[1], lightPoint[2]));
-    lightNormal.Normalize();
-
-    const float area = 2 * M_PI * light.cylinder.radius * light.cylinder.length;
-    const float pdf_a = 1.0f / area;
-    const float transform_pdf = std::max(0.0f, GfDot(-wI, lightNormal)) / (dist*dist);
-
-    return light.luminance
-            * transform_pdf / pdf_a
-            * std::max(0.0f, GfDot(wI, normal)) 
-            * vis;
+    return LightSample {
+        light.luminance,
+        wI,
+        dist,
+        invPdfW
+    };
 }
 
 GfVec4f
@@ -1149,6 +1188,8 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
         float brdf = 1.0f / M_PI;
         for (auto const& light: _lights)
         {
+            LightSample ls;
+            float vis;
             switch (light.kind)
             {
             case LightKind::Distant:
@@ -1156,19 +1197,40 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
                     * brdf;
                 break;
             case LightKind::Rect:
-                finalColor += _EvalRectLight(light, hitPos, normal, pcg) 
-                    * brdf;
+                ls = SampleAreaLight(light, hitPos, pcg.uniform(), pcg.uniform());
+                vis = _Visibility(hitPos, ls.wI, ls.dist);
+                finalColor += ls.Li 
+                    * posdot(ls.wI, normal) 
+                    * brdf 
+                    * vis 
+                    * ls.invPdfW;
                 break;
             case LightKind::Sphere:
-                finalColor += _EvalSphereLight(light, hitPos, normal, pcg) 
-                    * brdf;
+                ls = SampleAreaLight(light, hitPos, pcg.uniform(), pcg.uniform());
+                vis = _Visibility(hitPos, ls.wI, ls.dist);
+                finalColor += ls.Li 
+                    * posdot(ls.wI, normal) 
+                    * brdf 
+                    * vis 
+                    * ls.invPdfW;
                 break;
             case LightKind::Disk:
-                finalColor += _EvalDiskLight(light, hitPos, normal, pcg) 
-                    * brdf;
+                ls = SampleAreaLight(light, hitPos, pcg.uniform(), pcg.uniform());
+                vis = _Visibility(hitPos, ls.wI, ls.dist);
+                finalColor += ls.Li 
+                    * posdot(ls.wI, normal) 
+                    * brdf 
+                    * vis 
+                    * ls.invPdfW;
+                break;
             case LightKind::Cylinder:
-                finalColor += _EvalCylinderLight(light, hitPos, normal, pcg) 
-                    * brdf;
+                ls = SampleAreaLight(light, hitPos, pcg.uniform(), pcg.uniform());
+                vis = _Visibility(hitPos, ls.wI, ls.dist);
+                finalColor += ls.Li 
+                    * posdot(ls.wI, normal) 
+                    * brdf 
+                    * vis 
+                    * ls.invPdfW;
                 break;
             }
         }
