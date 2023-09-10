@@ -958,6 +958,37 @@ GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& p
     }
 }
 
+LightSample SampleDistantLight(Light const& light, GfVec3f const& position, float u1, float u2) 
+{
+    if (light.distant.halfAngleRadians > 0.0f)
+    {
+        // There's an implicit double-negation of the wI direction here
+        GfVec3f localDir = SampleUniformCone(GfVec2f(u1, u2), light.distant.halfAngleRadians);
+        GfVec3f wI = light.xform.TransformDir(localDir);
+        wI.Normalize();
+
+        return LightSample {
+            light.luminance,
+            wI,
+            std::numeric_limits<float>::max(),
+            1.0f / UniformConePDF(light.distant.halfAngleRadians)
+        };
+    }
+    else
+    {
+        // delta case, infinite pdf
+        GfVec3f wI = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, 1.0f));
+        wI.Normalize();
+
+        return LightSample {
+            light.luminance,
+            wI,
+            std::numeric_limits<float>::max(),
+            1.0f,
+        };
+    }
+}
+
 ShapeSample SampleRect(GfMatrix4f const& xf, float width, float height, float u1, float u2) {
     // Sample rectangle in object space
     const GfVec3f pLight(
@@ -1193,8 +1224,13 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
             switch (light.kind)
             {
             case LightKind::Distant:
-                finalColor += _EvalDistantLight(light, hitPos, normal, pcg) 
-                    * brdf;
+                ls = SampleDistantLight(light, hitPos, pcg.uniform(), pcg.uniform());
+                vis = _Visibility(hitPos, ls.wI, ls.dist);
+                finalColor += ls.Li 
+                    * posdot(ls.wI, normal) 
+                    * brdf 
+                    * vis 
+                    * ls.invPdfW;
                 break;
             case LightKind::Rect:
                 ls = SampleAreaLight(light, hitPos, pcg.uniform(), pcg.uniform());
