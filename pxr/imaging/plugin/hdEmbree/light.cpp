@@ -43,7 +43,7 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
     light.normalize = sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize).Get<bool>();
 
     // Get visibility
-    bool visible = sceneDelegate->GetVisible(id);
+    light.visible = sceneDelegate->GetVisible(id);
     //   TF_WARN("Visible: %d, luminance: %f %f %f", visible, light.luminance[0], light.luminance[1], light.luminance[2]);
 
     // Switch on the light type and pull the relevant attributes from the scene delegate

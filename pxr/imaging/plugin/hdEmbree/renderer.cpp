@@ -1139,6 +1139,7 @@ LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u
     const float cosThetaOl = posdot(-wI, ss.nWorld);
     float invPdfW = cosThetaOl / sqr(dist) / ss.pdfA;
 
+    // Combine the brightness parameters to get get emission luminance (nits)
     GfVec3f Li = light.color * light.intensity * powf(2.0f, light.exposure);
 
     // If normalize is enabled, we need to divide the luminance by the surface area of the light,
@@ -1148,14 +1149,14 @@ LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u
         Li *= ss.pdfA;
     }
 
-    // Apply focus
+    // Apply focus shaping
     if (light.shaping.focus > 0.0f) {
         const float ff = powf(cosThetaOl, light.shaping.focus);
         const GfVec3f focusTint = lerp(light.shaping.focusTint, GfVec3f(1), ff);
         Li = GfCompMult(Li, focusTint);
     }
 
-    // Apply cone. 
+    // Apply cone shaping
     // XXX: This is different from both RenderMan and Karma
     // Applying the softening to the cosine rather than the angle means we can raise the softness
     // above one and have it do something sensible. Need to check how that feels in use
@@ -1247,6 +1248,11 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
         float brdf = 1.0f / M_PI;
         for (auto const& light: _lights)
         {
+            if (!light.visible) 
+            {
+                continue;
+            }
+
             LightSample ls;
             float vis;
             switch (light.kind)

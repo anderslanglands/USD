@@ -99,6 +99,7 @@ struct Light
         Sphere sphere;
     };
     bool normalize;
+    bool visible;
     Shaping shaping;
 };
 
