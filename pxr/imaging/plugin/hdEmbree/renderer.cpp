@@ -1259,50 +1259,21 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
             {
             case LightKind::Distant:
                 ls = SampleDistantLight(light, hitPos, pcg.uniform(), pcg.uniform());
-                vis = _Visibility(hitPos, ls.wI, ls.dist);
-                finalColor += ls.Li 
-                    * posdot(ls.wI, normal) 
-                    * brdf 
-                    * vis 
-                    * ls.invPdfW;
                 break;
             case LightKind::Rect:
-                ls = SampleAreaLight(light, hitPos, pcg.uniform(), pcg.uniform());
-                vis = _Visibility(hitPos, ls.wI, ls.dist);
-                finalColor += ls.Li 
-                    * posdot(ls.wI, normal) 
-                    * brdf 
-                    * vis 
-                    * ls.invPdfW;
-                break;
             case LightKind::Sphere:
-                ls = SampleAreaLight(light, hitPos, pcg.uniform(), pcg.uniform());
-                vis = _Visibility(hitPos, ls.wI, ls.dist);
-                finalColor += ls.Li 
-                    * posdot(ls.wI, normal) 
-                    * brdf 
-                    * vis 
-                    * ls.invPdfW;
-                break;
             case LightKind::Disk:
-                ls = SampleAreaLight(light, hitPos, pcg.uniform(), pcg.uniform());
-                vis = _Visibility(hitPos, ls.wI, ls.dist);
-                finalColor += ls.Li 
-                    * posdot(ls.wI, normal) 
-                    * brdf 
-                    * vis 
-                    * ls.invPdfW;
-                break;
             case LightKind::Cylinder:
                 ls = SampleAreaLight(light, hitPos, pcg.uniform(), pcg.uniform());
-                vis = _Visibility(hitPos, ls.wI, ls.dist);
-                finalColor += ls.Li 
-                    * posdot(ls.wI, normal) 
-                    * brdf 
-                    * vis 
-                    * ls.invPdfW;
                 break;
             }
+
+            vis = _Visibility(hitPos, ls.wI, ls.dist);
+            finalColor += ls.Li 
+                * posdot(ls.wI, normal) 
+                * brdf 
+                * vis 
+                * ls.invPdfW;
         }
     }
 
