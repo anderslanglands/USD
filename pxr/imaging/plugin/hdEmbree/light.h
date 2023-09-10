@@ -74,6 +74,14 @@ struct Sphere
     float radius;
 };
 
+struct Shaping
+{
+    GfVec3f focusTint;
+    float focus;
+    float coneAngle;
+    float coneSoftness;
+};
+
 struct Light 
 {
     GfMatrix4f xform;
@@ -88,6 +96,8 @@ struct Light
         Rect rect;
         Sphere sphere;
     };
+    bool normalize;
+    Shaping shaping;
 };
 
 constexpr unsigned InvalidLightId = std::numeric_limits<unsigned>::max();

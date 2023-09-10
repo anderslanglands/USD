@@ -42,6 +42,7 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
   GfVec3f color = sceneDelegate->GetLightParamValue(id, HdLightTokens->color).Get<GfVec3f>();
 
   light.luminance = color * intensity * powf(2.0f, exposure);
+  light.normalize = sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize).Get<bool>();
 
   // Get visibility
   bool visible = sceneDelegate->GetVisible(id);
@@ -70,17 +71,6 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
             .Get<float>() / 2.0f)),
     };
 
-    if (sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize).Get<bool>()) {
-        // For the distant light, we define normalization as interpreting `inputs:intensity` as specifying
-        // lux, which not only "normalizes" the brightness with relation to angle, but also gives us a 
-        // meaningful unit
-        if (light.distant.halfAngleRadians > 0.0f)
-        {
-            float sinTheta = sinf(light.distant.halfAngleRadians);
-            light.luminance *= 1.0f / (sinTheta*sinTheta*M_PI);
-        }
-    }
-
   } else if (_lightType == HdSprimTypeTokens->domeLight) {
     light.kind = LightKind::Dome;
     light.dome = {};
@@ -92,36 +82,23 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
         sceneDelegate->GetLightParamValue(id, HdLightTokens->height)
             .Get<float>(),
     };
-
-    if (sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize).Get<bool>()) {
-        // Normalize by surface area... there's probably a smarter way of doing this
-        GfVec3f U(light.rect.width, 0.0f, 0.0f);
-        GfVec3f V(0.0f, light.rect.height, 0.0f);
-        U = light.xform.TransformDir(U);
-        V = light.xform.TransformDir(V);
-        light.luminance /= GfCross(U, V).GetLength();
-    }
-
   } else if (_lightType == HdSprimTypeTokens->sphereLight) {
     light.kind = LightKind::Sphere;
     light.sphere = {
         sceneDelegate->GetLightParamValue(id, HdLightTokens->radius)
             .Get<float>(),
     };
-
-    if (sceneDelegate->GetLightParamValue(id, HdLightTokens->normalize).Get<bool>()) {
-        // Normalize by surface area
-        /// XXX: this should be an ellipsoid
-        GfVec3f R(light.sphere.radius, 0.0f, 0.0f);
-        float r = R.GetLength();
-        light.luminance /= 4 * M_PI * r*r;
-    }
   } else if (_lightType == HdSprimTypeTokens->diskLight) {
     light.kind = LightKind::Disk;
     light.disk = {
         sceneDelegate->GetLightParamValue(id, HdLightTokens->radius).Get<float>()
     };
   }
+
+  light.shaping.focus = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingFocus).Get<float>();
+  light.shaping.focusTint = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingFocusTint).Get<GfVec3f>();
+  light.shaping.coneAngle = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingConeAngle).Get<float>();
+  light.shaping.coneSoftness = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingConeSoftness).Get<float>();
 
   HdEmbreeRenderer *renderer =
       static_cast<HdEmbreeRenderParam *>(renderParam)->GetRenderer();

@@ -890,12 +890,30 @@ float lerp(float a, float b, float t) {
     return (1-t)*a + t*b;
 }
 
+GfVec3f lerp(GfVec3f a, GfVec3f b, float t) {
+    return (1.0f - t)*a + t*b;
+}
+
 float sqr(float x) {
     return x*x;
 }
 
 float posdot(GfVec3f a, GfVec3f b) {
     return std::max(0.0f, GfDot(a, b));
+}
+
+float clamp(float x, float mn=0.0f, float mx=1.0f) {
+    return std::max(mn, std::min(x, mx));
+}
+
+float smoothstep(float a, float b, float t) {
+    t = clamp((t - a)/(b - a));
+    return t * t * (3.0f - 2.0f * t);
+}
+
+float smootherstep(float a, float b, float t) {
+    t = clamp((t - a)/(b - a));
+    return t * t * t * (t * (6.0f * t - 15.0f) + 10.0f);
 }
 
 // XXX: ported from PBRT
@@ -960,6 +978,14 @@ GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& p
 
 LightSample SampleDistantLight(Light const& light, GfVec3f const& position, float u1, float u2) 
 {
+    GfVec3f Li = light.luminance;
+    
+    if (light.normalize)
+    {
+        float sinTheta = sinf(light.distant.halfAngleRadians);
+        Li /= sqr(sinTheta) * M_PI;
+    }
+
     if (light.distant.halfAngleRadians > 0.0f)
     {
         // There's an implicit double-negation of the wI direction here
@@ -1133,10 +1159,35 @@ LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u
     GfVec3f wI = ss.pWorld - position;
     float dist = wI.GetLength();
     wI /= dist;
-    float invPdfW = posdot(-wI, ss.nWorld) / sqr(dist) / ss.pdfA;
+    const float cosThetaOl = posdot(-wI, ss.nWorld);
+    float invPdfW = cosThetaOl / sqr(dist) / ss.pdfA;
+
+    GfVec3f Li = light.luminance;
+
+    // If normalize is enabled, we need to divide the luminance by the surface area of the light,
+    // which for an area light is equivalent to multiplying by the area pdf, which is itself the 
+    // reciprocal of the surface area 
+    if (light.normalize) {
+        Li *= ss.pdfA;
+    }
+
+    // Apply focus
+    if (light.shaping.focus > 0.0f) {
+        const float ff = powf(cosThetaOl, light.shaping.focus);
+        const GfVec3f focusTint = lerp(light.shaping.focusTint, GfVec3f(1), ff);
+        Li = GfCompMult(Li, focusTint);
+    }
+
+    // Apply cone. 
+    // XXX: This is different from both RenderMan and Karma
+    // Applying the softening to the cosine rather than the angle means we can raise the softness
+    // above one and have it do something sensible. Need to check how that feels in use
+    const float cosThetaC = cosf(light.shaping.coneAngle * M_PI / 180.0f);
+    const float cosThetaS = lerp(cosThetaC, 1.0f, light.shaping.coneSoftness);
+    Li *= smootherstep(cosThetaC, cosThetaS, cosThetaOl);
 
     return LightSample {
-        light.luminance,
+        Li,
         wI,
         dist,
         invPdfW
