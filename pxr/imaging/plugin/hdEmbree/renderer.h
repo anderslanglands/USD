@@ -192,12 +192,6 @@ private:
     // Return the visibility from `position` along `direction`
     float _Visibility(GfVec3f const& position, GfVec3f const& direction, float offset = 1.0e-3f);
 
-    // Evaluate distant light contribution
-    GfVec3f _EvalDistantLight(Light const& light, 
-                              GfVec3f const& position, 
-                              GfVec3f const& normal, 
-                              PCG& pcg);
-
     // The bound aovs for this renderer.
     HdRenderPassAovBindingVector _aovBindings;
     // Parsed AOV name tokens.

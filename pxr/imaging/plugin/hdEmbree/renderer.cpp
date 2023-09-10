@@ -953,48 +953,25 @@ float HdEmbreeRenderer::_Visibility(GfVec3f const& position, GfVec3f const& dire
     return shadow.tfar > 0.0f;
 }
 
-GfVec3f HdEmbreeRenderer::_EvalDistantLight(Light const& light, GfVec3f const& position, GfVec3f const& normal, PCG& pcg)
-{
-    if (light.distant.halfAngleRadians > 0.0f)
-    {
-        // There's an implicit double-negation of the wI direction here
-        GfVec3f localDir = SampleUniformCone(GfVec2f(pcg.uniform(), pcg.uniform()), light.distant.halfAngleRadians);
-        float pdf = UniformConePDF(light.distant.halfAngleRadians);
-        GfVec3f wI = light.xform.TransformDir(localDir);
-        wI.Normalize();
-        float vis = _Visibility(position, wI);
-
-        return light.luminance * std::max(0.0f, GfDot(wI, normal)) * vis / pdf;
-    }
-    else
-    {
-        // delta case, infinite pdf
-        GfVec3f wI = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, 1.0f));
-        wI.Normalize();
-        float vis = _Visibility(position, wI);
-        return light.luminance * std::max(0.0f, GfDot(wI, normal)) * vis;
-    }
-}
-
 LightSample SampleDistantLight(Light const& light, GfVec3f const& position, float u1, float u2) 
 {
-    GfVec3f Li = light.luminance;
+    GfVec3f Li = light.color * light.intensity * powf(2.0f, light.exposure);
     
-    if (light.normalize)
-    {
-        float sinTheta = sinf(light.distant.halfAngleRadians);
-        Li /= sqr(sinTheta) * M_PI;
-    }
-
     if (light.distant.halfAngleRadians > 0.0f)
     {
+        if (light.normalize)
+        {
+            float sinTheta = sinf(light.distant.halfAngleRadians);
+            Li /= sqr(sinTheta) * M_PI;
+        }
+
         // There's an implicit double-negation of the wI direction here
         GfVec3f localDir = SampleUniformCone(GfVec2f(u1, u2), light.distant.halfAngleRadians);
         GfVec3f wI = light.xform.TransformDir(localDir);
         wI.Normalize();
 
         return LightSample {
-            light.luminance,
+            Li,
             wI,
             std::numeric_limits<float>::max(),
             1.0f / UniformConePDF(light.distant.halfAngleRadians)
@@ -1007,7 +984,7 @@ LightSample SampleDistantLight(Light const& light, GfVec3f const& position, floa
         wI.Normalize();
 
         return LightSample {
-            light.luminance,
+            Li,
             wI,
             std::numeric_limits<float>::max(),
             1.0f,
@@ -1162,7 +1139,7 @@ LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u
     const float cosThetaOl = posdot(-wI, ss.nWorld);
     float invPdfW = cosThetaOl / sqr(dist) / ss.pdfA;
 
-    GfVec3f Li = light.luminance;
+    GfVec3f Li = light.color * light.intensity * powf(2.0f, light.exposure);
 
     // If normalize is enabled, we need to divide the luminance by the surface area of the light,
     // which for an area light is equivalent to multiplying by the area pdf, which is itself the 

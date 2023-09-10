@@ -85,7 +85,9 @@ struct Shaping
 struct Light 
 {
     GfMatrix4f xform;
-    GfVec3f luminance;
+    GfVec3f color;
+    float intensity;
+    float exposure;
     LightKind kind;
     union
     {
