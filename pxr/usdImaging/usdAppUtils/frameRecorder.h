@@ -65,7 +65,8 @@ public:
     USDAPPUTILS_API
     UsdAppUtilsFrameRecorder(
         const TfToken& rendererPluginId = TfToken(),
-        bool gpuEnabled = true);
+        bool gpuEnabled = true,
+        bool defaultLightDisabled=false);
 
     /// Gets the ID of the Hydra renderer plugin that will be used for
     /// recording.
@@ -145,6 +146,7 @@ private:
     float _complexity;
     TfToken _colorCorrectionMode;
     TfTokenVector _purposes;
+    bool _defaultLightDisabled;
 };
 
 
