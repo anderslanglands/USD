@@ -10,6 +10,18 @@ if (NOT ${PXR_BUILD_GPU_SUPPORT})
         "Skipping ${PXR_PACKAGE} because PXR_BUILD_GPU_SUPPORT is OFF")
     return()
 endif()
+if(NOT OpenImageIO_FOUND)
+    message(WARNING "Not building ${PXR_PACKAGE} because of missing dependency: OpenImageIO")
+    return()
+endif()
+
+# Use the import targets set by Imath's package config
+if (Imath_FOUND)
+    set(__OIIO_IMATH_LIBS "Imath::Imath")
+else()
+    set(__OIIO_IMATH_INCLUDE ${OPENEXR_INCLUDE_DIRS})
+    set(__OIIO_IMATH_LIBS ${OPENEXR_LIBRARIES})
+endif()
 
 pxr_plugin(hdEmbree
    LIBRARIES
@@ -23,10 +35,14 @@ pxr_plugin(hdEmbree
         hdx
         ${TBB_tbb_LIBRARY}
         ${EMBREE_LIBRARY}
+        ${OIIO_LIBRARIES}
+        ${__OIIO_IMATH_LIBS}
 
     INCLUDE_DIRS
         ${TBB_INCLUDE_DIRS}
         ${EMBREE_INCLUDE_DIR}
+        ${OIIO_INCLUDE_DIRS}
+        ${__OIIO_IMATH_INCLUDE}
 
     PUBLIC_CLASSES
         config

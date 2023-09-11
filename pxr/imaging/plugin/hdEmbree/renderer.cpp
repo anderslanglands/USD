@@ -36,9 +36,11 @@
 #include "pxr/base/gf/vec2f.h"
 #include "pxr/base/work/loops.h"
 
-#include <algorithm>
+#include <OpenImageIO/imageio.h>
+
 #include <boost/functional/hash.hpp>
 
+#include <algorithm>
 #include <chrono>
 #include <limits>
 #include <random>

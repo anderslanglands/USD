@@ -19,13 +19,7 @@ HdEmbreeLight::~HdEmbreeLight() {}
 
 void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
                          HdRenderParam *renderParam, HdDirtyBits *dirtyBits) {
-    
-    if (GetId().GetString().find("/_UsdImaging_HdEmbreeRendererPlugin") != std::string::npos) {
-        // XXX: Where TF is this coming from?
-        return;
-    }
-
-    //   TF_WARN("Syncing light %s", GetId().GetText());
+    TF_WARN("Syncing light %s: %d", GetId().GetText(), *dirtyBits);
 
     SdfPath const &id = GetId();
     Light light;
@@ -33,7 +27,6 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
     // Get light's transform. We'll only consider the first time sample for now
     HdTimeSampleArray<GfMatrix4d, 1> xformSamples;
     sceneDelegate->SampleTransform(id, &xformSamples);
-    // rows are the axes
     light.xform = GfMatrix4f(xformSamples.values[0]);
 
     // Store luminance parameters
@@ -71,6 +64,10 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
 
     } else if (_lightType == HdSprimTypeTokens->domeLight) {
         light.kind = LightKind::Dome;
+        
+        SdfAssetPath texturePath = sceneDelegate->GetLightParamValue(id, HdLightTokens->textureFile).Get<SdfAssetPath>();
+        std::string const& resolvedPath = texturePath.GetResolvedPath();
+
         light.dome = {};
     } else if (_lightType == HdSprimTypeTokens->rectLight) {
         light.kind = LightKind::Rect;
@@ -114,6 +111,8 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
     HdEmbreeRenderer *renderer =
         static_cast<HdEmbreeRenderParam *>(renderParam)->GetRenderer();
     _lightId = renderer->SetLight(id, light);
+
+    *dirtyBits &= ~HdLight::AllDirty;
 }
 
 HdDirtyBits HdEmbreeLight::GetInitialDirtyBitsMask() const {
