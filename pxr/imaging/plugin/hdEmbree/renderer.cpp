@@ -1134,12 +1134,12 @@ LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u
     // Transform PDF from area measure to solid angle measure. We use the inverse PDF
     // here to avoid division by zero when the surface point is behind the light
     GfVec3f wI = ss.pWorld - position;
-    float dist = wI.GetLength();
+    const float dist = wI.GetLength();
     wI /= dist;
     const float cosThetaOl = posdot(-wI, ss.nWorld);
     float invPdfW = cosThetaOl / sqr(dist) / ss.pdfA;
 
-    // Combine the brightness parameters to get get emission luminance (nits)
+    // Combine the brightness parameters to get initial emission luminance (nits)
     GfVec3f Li = light.color * light.intensity * powf(2.0f, light.exposure);
 
     // If normalize is enabled, we need to divide the luminance by the surface area of the light,
@@ -1245,20 +1245,28 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
     }
     else
     {
+        // For now just a 100% reflective diffuse BRDF
         float brdf = 1.0f / M_PI;
+
+        // For now just iterate over all lights
+        /// XXX: simple uniform sampling may be better here
         for (auto const& light: _lights)
         {
+            // Skip light if it's hidden
             if (!light.visible) 
             {
                 continue;
             }
 
+            // Sample the light
             LightSample ls;
-            float vis;
             switch (light.kind)
             {
             case LightKind::Distant:
                 ls = SampleDistantLight(light, hitPos, pcg.uniform(), pcg.uniform());
+                break;
+            case LightKind::Dome:
+                continue;
                 break;
             case LightKind::Rect:
             case LightKind::Sphere:
@@ -1268,7 +1276,10 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
                 break;
             }
 
-            vis = _Visibility(hitPos, ls.wI, ls.dist);
+            // Trace shadow
+            float vis = _Visibility(hitPos, ls.wI, ls.dist);
+
+            // Add exitant luminance
             finalColor += ls.Li 
                 * posdot(ls.wI, normal) 
                 * brdf 
