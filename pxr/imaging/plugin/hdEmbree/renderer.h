@@ -235,6 +235,7 @@ private:
     // Lights
     std::map<SdfPath, unsigned> _lightMap;
     std::vector<Light> _lights;
+    int _domeIndex;
 };
 
 PXR_NAMESPACE_CLOSE_SCOPE

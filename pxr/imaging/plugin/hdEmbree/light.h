@@ -29,6 +29,7 @@
 #include "pxr/base/gf/vec3f.h"
 #include "pxr/base/gf/matrix4f.h"
 #include <limits>
+#include <memory>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -60,7 +61,9 @@ struct Distant
 
 struct Dome
 {
-    // texture path
+    GfVec3f* pixels;
+    int width;
+    int height;
 };
 
 struct Rect 

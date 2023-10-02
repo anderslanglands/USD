@@ -5,6 +5,10 @@
 #include "pxr/imaging/hd/sceneDelegate.h"
 #include "pxr/imaging/hd/tokens.h"
 
+#include <OpenImageIO/imageio.h>
+
+#include <OpenImageIO/typedesc.h>
+#include <memory>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -16,6 +20,35 @@ HdEmbreeLight::HdEmbreeLight(SdfPath const &id, TfToken const &lightType)
 }
 
 HdEmbreeLight::~HdEmbreeLight() {}
+
+static Dome LoadDomelightTexture(std::string const& path)
+{
+    auto in = OIIO::ImageInput::open(path);
+    if (!in) 
+    {
+        TF_WARN("could not open dome light texture %s", path.c_str());
+        return {
+            nullptr,
+            0,
+            0
+        };
+    }
+
+    OIIO::ImageSpec const& spec = in->spec();
+    GfVec3f* pixels = new GfVec3f[spec.width * spec.height * 3];
+    in->read_image(0, 3, OIIO::TypeDesc::FLOAT, (float*)pixels);
+
+    // for (int i = 0; i < spec.width * spec.height * 3; ++i) {
+    //     pixels[i] = GfVec3f(1);
+    // }
+
+    in->close();
+    return {
+        pixels,
+        spec.width,
+        spec.height
+    };
+}
 
 void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
                          HdRenderParam *renderParam, HdDirtyBits *dirtyBits) {
@@ -67,8 +100,7 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
         
         SdfAssetPath texturePath = sceneDelegate->GetLightParamValue(id, HdLightTokens->textureFile).Get<SdfAssetPath>();
         std::string const& resolvedPath = texturePath.GetResolvedPath();
-
-        light.dome = {};
+        light.dome = LoadDomelightTexture(resolvedPath);
     } else if (_lightType == HdSprimTypeTokens->rectLight) {
         light.kind = LightKind::Rect;
         light.rect = {
@@ -119,6 +151,7 @@ HdDirtyBits HdEmbreeLight::GetInitialDirtyBitsMask() const {
     return HdLight::AllDirty;
 }
 
-void HdEmbreeLight::Finalize(HdRenderParam *renderParam) {}
+void HdEmbreeLight::Finalize(HdRenderParam *renderParam) {
+}
 
 PXR_NAMESPACE_CLOSE_SCOPE

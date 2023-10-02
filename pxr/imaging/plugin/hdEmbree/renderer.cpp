@@ -23,8 +23,8 @@
 //
 #include "renderer.h"
 #include "light.h"
-
 #include "pcg_basic.h"
+
 #include "pxr/imaging/plugin/hdEmbree/renderBuffer.h"
 #include "pxr/imaging/plugin/hdEmbree/config.h"
 #include "pxr/imaging/plugin/hdEmbree/context.h"
@@ -35,8 +35,6 @@
 #include "pxr/base/gf/matrix3f.h"
 #include "pxr/base/gf/vec2f.h"
 #include "pxr/base/work/loops.h"
-
-#include <OpenImageIO/imageio.h>
 
 #include <boost/functional/hash.hpp>
 
@@ -65,10 +63,21 @@ HdEmbreeRenderer::HdEmbreeRenderer()
     , _ambientOcclusionSamples(0)
     , _enableSceneColors(false)
     , _completedSamples(0)
+    , _domeIndex(-1)
 {
 }
 
-HdEmbreeRenderer::~HdEmbreeRenderer() = default;
+HdEmbreeRenderer::~HdEmbreeRenderer()
+{
+    // delete any dome light textures that have been allocated
+    for (auto const& light: _lights)
+    {
+        if (light.kind == LightKind::Dome)
+        {
+            delete[] light.dome.pixels;
+        }
+    }
+}
 
 void
 HdEmbreeRenderer::SetScene(RTCScene scene)
@@ -136,11 +145,23 @@ unsigned HdEmbreeRenderer::SetLight(SdfPath const& lightPath, Light const& light
     auto it = _lightMap.find(lightPath);
     if (it != _lightMap.end())
     {
+        if (_lights[it->second].kind == LightKind::Dome)
+        {
+            delete[] light.dome.pixels;
+            _domeIndex = it->second;
+        }
+
         _lights[it->second] = light;
         return it->second;
     }
     else
     {
+        if (light.kind == LightKind::Dome)
+        {
+            _domeIndex = _lights.size();
+            printf("Setting dome %d\n", _domeIndex);
+        }
+
         _lights.push_back(light);
         _lightMap[lightPath] = _lights.size() - 1;
         return _lights.size() - 1;
@@ -1052,12 +1073,16 @@ ShapeSample SampleSphere(GfMatrix4f const& xf, float radius, float u1, float u2)
     };
 }
 
+GfVec3f SampleDiskPolar(float u1, float u2)
+{
+    const float r = sqrtf(u1);
+    const float theta = 2 * M_PI * u2;
+    return GfVec3f(r * cosf(theta), r * sinf(theta), 0.0f);
+}
 
 ShapeSample SampleDisk(GfMatrix4f const& xf, float radius, float u1, float u2) {
     // Sample disk in light space
-    const float r = sqrtf(u1);
-    const float theta = 2 * M_PI * u2;
-    GfVec3f pLight(r * cosf(theta), r * sinf(theta), 0.0f);
+    GfVec3f pLight = SampleDiskPolar(u1, u2);
     const GfVec3f nLight(0.0f, 0.0f, -1.0f);
     const GfVec2f uv(pLight[0], pLight[1]);
     pLight *= radius;
@@ -1174,13 +1199,106 @@ LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u
     };
 }
 
+GfVec3f SampleDomeTexture(Dome const& dome, float s, float t)
+{
+    int x = float(dome.width) * s;
+    int y = float(dome.height) * t;
+
+    return dome.pixels[y*dome.width + x];
+}
+
+LightSample EvalDomeLight(Light const& light, GfVec3f const& direction)
+{
+    float t = acosf(direction[1]) / M_PI;
+    float s = atan2f(direction[0], direction[2]) / (2 * M_PI);
+    s = 1.0f - fmodf(s+0.5f, 1.0f);
+
+    GfVec3f Li = SampleDomeTexture(light.dome, s, t);
+
+    return LightSample {
+        Li,
+        direction,
+        std::numeric_limits<float>::max(),
+        1.0f / (4*M_PI)
+    };
+}
+
+void orthoBasis(GfVec3f const& n, GfVec3f& b1, GfVec3f& b2)
+{
+#if 1
+    float sign = copysignf(1.0f, n[2]);
+    const float a = 1.0f / (sign + n[2]);
+    const float b = n[0] * n[1] * a;
+    b1 = GfVec3f(1.0f + sign * n[0] * n[0] * a, sign * b, -sign * n[0]).GetNormalized();
+    b2 = GfVec3f(b, sign + n[1] * n[1] * a, -n[1]).GetNormalized();
+#else
+    if (n * GfVec3f(1, 0, 0) < 0.01) {
+        b1 = GfCross(n, GfVec3f(0, 0, 1));
+    } else {
+        b1 = GfCross(n, GfVec3f(1, 0, 0));
+    }
+    b1.Normalize();
+    b2 = GfCross(n, b1).GetNormalized();
+    b1 = GfCross(n, b2).GetNormalized();
+#endif
+}
+
+LightSample SampleDomeLight(Light const& light, GfVec3f const& W, float u1, float u2)
+{
+    GfVec3f U, V;
+    orthoBasis(W, U, V);
+
+#if 0
+    // Cosine hemisphere sampling for simplicity
+    GfVec3f p = SampleDiskPolar(u1, u2);
+    const float z = sqrtf(std::max(0.0f, 1 - sqr(p[0]) - sqr(p[1])));
+
+    const GfVec3f wI = (W * z + p[0] * U + p[1] * V).GetNormalized();
+
+    LightSample ls = EvalDomeLight(light, wI);
+    ls.invPdfW = M_PI / z;
+
+#else
+
+    float z = u1;
+    float r = sqrtf(std::max(0.0f, 1.0f - sqr(z)));
+    float phi = 2 * M_PI * u2;
+    
+    const GfVec3f wI = (W * z + r * cosf(phi) * U + r * sinf(phi) * V).GetNormalized();
+
+    LightSample ls = EvalDomeLight(light, wI);
+    ls.invPdfW = 2 * M_PI;
+#endif
+
+    return ls;
+}
+
 GfVec4f
 HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
                                 PCG& pcg,
                                 GfVec4f const& clearColor)
 {
     if (rayHit.hit.geomID == RTC_INVALID_GEOMETRY_ID) {
-        return clearColor;
+        if (_domeIndex >= 0)
+        {
+            LightSample ls = EvalDomeLight(
+                _lights[_domeIndex], 
+                GfVec3f(rayHit.ray.dir_x, 
+                        rayHit.ray.dir_y, 
+                        rayHit.ray.dir_z).GetNormalized()
+            );
+
+            return GfVec4f(
+                ls.Li[0],
+                ls.Li[1],
+                ls.Li[2],
+                1.0f
+            );
+        }
+        else
+        {
+            return clearColor;
+        }
     }
 
     // Get the instance and prototype context structures for the hit prim.
@@ -1242,7 +1360,6 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
 
         // XXX: We should support opacity here...
 
-        // Return color * diffuseLight * aoLightIntensity.
         finalColor = color * diffuseLight * aoLightIntensity;
     }
     else
@@ -1268,7 +1385,7 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
                 ls = SampleDistantLight(light, hitPos, pcg.uniform(), pcg.uniform());
                 break;
             case LightKind::Dome:
-                continue;
+                ls = SampleDomeLight(light, normal, pcg.uniform(), pcg.uniform());
                 break;
             case LightKind::Rect:
             case LightKind::Sphere:
