@@ -1159,6 +1159,12 @@ float EvalIES(Light const& light, GfVec3f const& wI) {
     float theta = Theta(wE);
     float phi = Phi(wE);
 
+    if (ies.angleScale > 0) {
+        theta = lerp(theta, M_PI, ies.angleScale);
+    } else {
+        theta = lerp(theta, 0, fabsf(ies.angleScale));
+    }
+
     float norm = ies.normalize ? ies.iesFile.power() : 1.0f;
 
     return ies.iesFile.eval(theta, phi) / norm;
