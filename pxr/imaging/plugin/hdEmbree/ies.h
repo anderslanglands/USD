@@ -36,7 +36,7 @@ public:
     }
 
     float power() const {
-        return _luminousExitance;
+        return _power;
     }
 
 protected:
@@ -56,7 +56,7 @@ protected:
     std::vector<std::vector<float>> _intensities;
 
     float _peakIntensity = 0;
-    float _luminousExitance = 0;
+    float _power = 0;
 
     // Types of angle representation in IES files. Currently, only B and C are supported.
     enum IESType { TYPE_A = 3, TYPE_B = 2, TYPE_C = 1 } _type;

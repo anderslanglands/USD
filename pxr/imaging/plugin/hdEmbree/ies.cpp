@@ -430,14 +430,14 @@ bool IESFile::process() {
             float intensity = (i0 + i1) / 2;
             // solid angle of the patch
             float dS = dh * dv * sinf(_v_angles[v] + dv/2);
-            _luminousExitance += dS * intensity;
+            _power += dS * intensity;
         }
     }
     // XXX: where does this factor come from? This gets us to the lumens value stored in the 
     // IES file
-    _luminousExitance /= (M_PI/2);
+    _power /= (M_PI/2);
     // XXX: and this factor matches Karma & RIS
-    _luminousExitance /= M_PI * (is_sphere ? 4 : 2);
+    _power /= M_PI * (is_sphere ? 4 : 2);
 
     return true;
 }
