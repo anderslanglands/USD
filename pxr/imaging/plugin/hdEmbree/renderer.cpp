@@ -990,7 +990,7 @@ LightSample SampleDistantLight(Light const& light, GfVec3f const& position, floa
 
         // There's an implicit double-negation of the wI direction here
         GfVec3f localDir = SampleUniformCone(GfVec2f(u1, u2), light.distant.halfAngleRadians);
-        GfVec3f wI = light.xform.TransformDir(localDir);
+        GfVec3f wI = light.xformLightToWorld.TransformDir(localDir);
         wI.Normalize();
 
         return LightSample {
@@ -1003,7 +1003,7 @@ LightSample SampleDistantLight(Light const& light, GfVec3f const& position, floa
     else
     {
         // delta case, infinite pdf
-        GfVec3f wI = light.xform.TransformDir(GfVec3f(0.0f, 0.0f, 1.0f));
+        GfVec3f wI = light.xformLightToWorld.TransformDir(GfVec3f(0.0f, 0.0f, 1.0f));
         wI.Normalize();
 
         return LightSample {
@@ -1136,21 +1136,49 @@ ShapeSample SampleCylinder(GfMatrix4f const& xf, float radius, float length, flo
     };
 }
 
+float Theta(GfVec3f const& v) {
+    return acosf(clamp(v[2], -1.f, 1.f));
+}
+
+float Phi(GfVec3f const& v) {
+    float p = atan2f(v[1], v[0]);
+    return p < 0 ? (p + 2 * M_PI) : p;
+}
+
+float EvalIES(Light const& light, GfVec3f const& wI) {
+    IES const& ies = light.shaping.ies;
+
+    if (!ies.iesFile.valid()) {
+        // Either none specified or there was an error loading. In either case, just ignore
+        return 1.0f;
+    }
+
+    // emission direction in light space
+    GfVec3f wE = light.xformWorldToLight.TransformDir(wI).GetNormalized();
+
+    float theta = Theta(wE);
+    float phi = Phi(wE);
+
+    float norm = ies.normalize ? ies.iesFile.power() : 1.0f;
+
+    return ies.iesFile.eval(theta, phi) / norm;
+}
+
 LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u1, float u2) {
     // First, sample the shape of the area light in its surface area measure
     ShapeSample ss;
     switch (light.kind) {
     case LightKind::Rect:
-        ss = SampleRect(light.xform, light.rect.width, light.rect.height, u1, u2);
+        ss = SampleRect(light.xformLightToWorld, light.rect.width, light.rect.height, u1, u2);
         break;
     case LightKind::Sphere:
-        ss = SampleSphere(light.xform, light.sphere.radius, u1, u2);
+        ss = SampleSphere(light.xformLightToWorld, light.sphere.radius, u1, u2);
         break;
     case LightKind::Disk:
-        ss = SampleDisk(light.xform, light.disk.radius, u1, u2);
+        ss = SampleDisk(light.xformLightToWorld, light.disk.radius, u1, u2);
         break;
     case LightKind::Cylinder:
-        ss = SampleCylinder(light.xform, light.cylinder.radius, light.cylinder.length, u1, u2);
+        ss = SampleCylinder(light.xformLightToWorld, light.cylinder.radius, light.cylinder.length, u1, u2);
         break;
     case LightKind::Distant:
     case LightKind::Dome:
@@ -1190,6 +1218,9 @@ LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u
     const float cosThetaC = cosf(light.shaping.coneAngle * M_PI / 180.0f);
     const float cosThetaS = lerp(cosThetaC, 1.0f, light.shaping.coneSoftness);
     Li *= smootherstep(cosThetaC, cosThetaS, cosThetaOl);
+
+    // Applu IES
+    Li *= EvalIES(light, wI);
 
     return LightSample {
         Li,

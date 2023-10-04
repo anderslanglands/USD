@@ -1,4 +1,5 @@
 #include "light.h"
+#include "ies.h"
 #include "renderParam.h"
 #include "renderer.h"
 
@@ -6,9 +7,11 @@
 #include "pxr/imaging/hd/tokens.h"
 
 #include <OpenImageIO/imageio.h>
-
 #include <OpenImageIO/typedesc.h>
+
 #include <memory>
+#include <fstream>
+#include <sstream>
 
 PXR_NAMESPACE_OPEN_SCOPE
 
@@ -60,7 +63,8 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
     // Get light's transform. We'll only consider the first time sample for now
     HdTimeSampleArray<GfMatrix4d, 1> xformSamples;
     sceneDelegate->SampleTransform(id, &xformSamples);
-    light.xform = GfMatrix4f(xformSamples.values[0]);
+    light.xformLightToWorld = GfMatrix4f(xformSamples.values[0]);
+    light.xformWorldToLight = light.xformLightToWorld.GetInverse();
 
     // Store luminance parameters
     light.intensity = sceneDelegate->GetLightParamValue(id, HdLightTokens->intensity).Get<float>();
@@ -127,17 +131,47 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
     if (value.IsHolding<float>()) {
         light.shaping.focus = value.UncheckedGet<float>();
     }
+
     value = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingFocusTint);
     if (value.IsHolding<GfVec3f>()) {
         light.shaping.focusTint = value.UncheckedGet<GfVec3f>();
     }
+
     value = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingConeAngle);
     if (value.IsHolding<float>()) {
         light.shaping.coneAngle = value.UncheckedGet<float>();
     }
+
     value = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingConeSoftness);
     if (value.IsHolding<float>()) {
         light.shaping.coneSoftness = value.UncheckedGet<float>();
+    }
+
+    value = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingIesFile);
+    if (value.IsHolding<SdfAssetPath>()) {
+        SdfAssetPath iesAssetPath = value.UncheckedGet<SdfAssetPath>();
+        std::string iesPath = iesAssetPath.GetResolvedPath();
+
+        std::ifstream in(iesPath);
+        if (!in.is_open()) {
+            printf("ERROR: could not open ies file %s\n", iesPath.c_str());
+        }
+        std::stringstream buffer;
+        buffer << in.rdbuf();
+
+        if (!light.shaping.ies.iesFile.load(buffer.str())) {
+            printf("could not load ies file\n");
+        }
+    }
+
+    value = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingIesNormalize);
+    if (value.IsHolding<bool>()) {
+        light.shaping.ies.normalize = value.UncheckedGet<bool>();
+    }
+
+    value = sceneDelegate->GetLightParamValue(id, HdLightTokens->shapingIesAngleScale);
+    if (value.IsHolding<float>()) {
+        light.shaping.ies.angleScale = value.UncheckedGet<float>();
     }
 
     HdEmbreeRenderer *renderer =

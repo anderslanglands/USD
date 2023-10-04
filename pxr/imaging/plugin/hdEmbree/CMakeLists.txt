@@ -46,6 +46,7 @@ pxr_plugin(hdEmbree
 
     PUBLIC_CLASSES
         config
+        ies
         instancer
         light
         mesh

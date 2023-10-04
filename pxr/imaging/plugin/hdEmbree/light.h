@@ -24,6 +24,8 @@
 #ifndef PXR_IMAGING_PLUGIN_HD_EMBREE_LIGHT_H
 #define PXR_IMAGING_PLUGIN_HD_EMBREE_LIGHT_H
 
+#include "ies.h"
+
 #include "pxr/imaging/hd/light.h"
 
 #include "pxr/base/gf/vec3f.h"
@@ -77,17 +79,26 @@ struct Sphere
     float radius;
 };
 
+struct IES
+{
+    IESFile iesFile;
+    bool normalize;
+    float angleScale;
+};
+
 struct Shaping
 {
     GfVec3f focusTint;
     float focus;
     float coneAngle;
     float coneSoftness;
+    IES ies;
 };
 
 struct Light 
 {
-    GfMatrix4f xform;
+    GfMatrix4f xformLightToWorld;
+    GfMatrix4f xformWorldToLight;
     GfVec3f color;
     float intensity;
     float exposure;
