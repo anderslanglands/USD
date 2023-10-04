@@ -55,7 +55,10 @@ static Dome LoadDomelightTexture(std::string const& path)
 
 void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
                          HdRenderParam *renderParam, HdDirtyBits *dirtyBits) {
-    TF_WARN("Syncing light %s: %d", GetId().GetText(), *dirtyBits);
+    HdEmbreeRenderParam *embreeRenderParam =
+        static_cast<HdEmbreeRenderParam*>(renderParam);
+    // grab this to bump the scene version and cause a re-render
+    RTCScene _scene = embreeRenderParam->AcquireSceneForEdit();
 
     SdfPath const &id = GetId();
     Light light;
@@ -151,6 +154,9 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
     if (value.IsHolding<SdfAssetPath>()) {
         SdfAssetPath iesAssetPath = value.UncheckedGet<SdfAssetPath>();
         std::string iesPath = iesAssetPath.GetResolvedPath();
+        if (iesPath.empty()) {
+            iesPath = iesAssetPath.GetAssetPath();
+        }
 
         std::ifstream in(iesPath);
         if (!in.is_open()) {
