@@ -37,7 +37,7 @@
 
 PXR_NAMESPACE_OPEN_SCOPE
 
-class HdEmbreePrototypeContext;
+struct HdEmbreePrototypeContext;
 class HdEmbreeInstanceContext;
 
 /// \class HdEmbreeMesh
