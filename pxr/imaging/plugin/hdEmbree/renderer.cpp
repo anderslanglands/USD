@@ -1159,10 +1159,11 @@ float EvalIES(Light const& light, GfVec3f const& wI) {
     float theta = Theta(wE);
     float phi = Phi(wE);
 
+    // apply angle scale to theta, matching Karma
     if (ies.angleScale > 0) {
-        theta = lerp(theta, M_PI, ies.angleScale);
-    } else {
-        theta = lerp(theta, 0, fabsf(ies.angleScale));
+        theta = clamp(theta / (1 - ies.angleScale), 0, M_PI);
+    } else if (ies.angleScale < 0) {
+        theta = clamp(theta / (1 / (1 + ies.angleScale)), 0, M_PI);
     }
 
     float norm = ies.normalize ? ies.iesFile.power() : 1.0f;

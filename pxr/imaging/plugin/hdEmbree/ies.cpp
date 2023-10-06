@@ -425,17 +425,16 @@ bool IESFile::process() {
             float dh = _h_angles[h+1] - _h_angles[h];
             float dv = _v_angles[v+1] - _v_angles[v];
             // bilinearly interpolate intensity at the patch center
-            float i0 = (_intensities[h][v] + _intensities[h][v+1] / 2);
-            float i1 = (_intensities[h+1][v] + _intensities[h+1][v+1] / 2);
+            float i0 = (_intensities[h][v] + _intensities[h][v+1]) / 2;
+            float i1 = (_intensities[h+1][v] + _intensities[h+1][v+1]) / 2;
             float intensity = (i0 + i1) / 2;
             // solid angle of the patch
             float dS = dh * dv * sinf(_v_angles[v] + dv/2);
             _power += dS * intensity;
         }
     }
-    // XXX: where does this factor come from? This gets us to the lumens value stored in the 
-    // IES file
-    _power /= (M_PI/2);
+    // printf("power: %f\n", _power);
+    
     // XXX: and this factor matches Karma & RIS
     _power /= M_PI * (is_sphere ? 4 : 2);
 
@@ -448,6 +447,12 @@ float IESFile::eval(float theta, float phi) const {
     float dh = 0;
     float dv = 0;
 
+    if (phi < 0) {
+        phi += 2 * M_PI;
+    } else if (phi > 2* M_PI) {
+        phi -= 2 * M_PI;
+    }
+
     for (int i = 0; i < _h_angles.size() - 1; ++i) {
         if (phi >= _h_angles[i] && phi < _h_angles[i+1]) {
             hi = i;
@@ -456,11 +461,19 @@ float IESFile::eval(float theta, float phi) const {
         }
     }
 
-    for (int i = 0; i < _v_angles.size() - 1; ++i) {
-        if (theta >= _v_angles[i] && theta < _v_angles[i+1]) {
-            vi = i;
-            dv = linearstep(theta, _v_angles[i], _v_angles[i+1]);
-            break;
+    if (theta < 0) {
+        vi = 0;
+        dv = 0;
+    } else if (theta >= M_PI) {
+        vi = _v_angles.size()-2;
+        dv = 1;
+    } else {
+        for (int i = 0; i < _v_angles.size() - 1; ++i) {
+            if (theta >= _v_angles[i] && theta < _v_angles[i+1]) {
+                vi = i;
+                dv = linearstep(theta, _v_angles[i], _v_angles[i+1]);
+                break;
+            }
         }
     }
 
