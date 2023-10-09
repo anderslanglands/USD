@@ -34,6 +34,7 @@
 #include "pxr/base/gf/rect2i.h"
 
 #include <embree3/rtcore.h>
+#include <embree3/rtcore_device.h>
 #include <embree3/rtcore_ray.h>
 
 #include <atomic>
@@ -98,7 +99,7 @@ public:
     void SetAovBindings(HdRenderPassAovBindingVector const &aovBindings);
 
     /// Set a light
-    unsigned SetLight(SdfPath const& lightPath, Light const& light);
+    unsigned SetLight(SdfPath const& lightPath, Light light, RTCDevice device);
 
     /// Get the aov bindings being used for rendering.
     ///   \return the current aov bindings.

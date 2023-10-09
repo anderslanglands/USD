@@ -9,6 +9,10 @@
 #include <OpenImageIO/imageio.h>
 #include <OpenImageIO/typedesc.h>
 
+#include <embree3/rtcore_buffer.h>
+#include <embree3/rtcore_common.h>
+#include <embree3/rtcore_geometry.h>
+#include <embree3/rtcore_scene.h>
 #include <memory>
 #include <fstream>
 #include <sstream>
@@ -24,7 +28,7 @@ HdEmbreeLight::HdEmbreeLight(SdfPath const &id, TfToken const &lightType)
 
 HdEmbreeLight::~HdEmbreeLight() {}
 
-static Dome LoadDomelightTexture(std::string const& path)
+static LightTexture LoadLightTexture(std::string const& path)
 {
     auto in = OIIO::ImageInput::open(path);
     if (!in) 
@@ -57,8 +61,10 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
                          HdRenderParam *renderParam, HdDirtyBits *dirtyBits) {
     HdEmbreeRenderParam *embreeRenderParam =
         static_cast<HdEmbreeRenderParam*>(renderParam);
-    // grab this to bump the scene version and cause a re-render
-    RTCScene _scene = embreeRenderParam->AcquireSceneForEdit();
+
+    // grabbin this bumps the scene version and causes a re-render
+    RTCScene scene = embreeRenderParam->AcquireSceneForEdit();
+    RTCDevice device = embreeRenderParam->GetEmbreeDevice();
 
     SdfPath const &id = GetId();
     Light light;
@@ -78,6 +84,8 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
     // Get visibility
     light.visible = sceneDelegate->GetVisible(id);
     //   TF_WARN("Visible: %d, luminance: %f %f %f", visible, light.luminance[0], light.luminance[1], light.luminance[2]);
+
+    light.rtcMeshId = RTC_INVALID_GEOMETRY_ID;
 
     // Switch on the light type and pull the relevant attributes from the scene delegate
     if (_lightType == HdSprimTypeTokens->cylinderLight) {
@@ -107,8 +115,9 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
         
         SdfAssetPath texturePath = sceneDelegate->GetLightParamValue(id, HdLightTokens->textureFile).Get<SdfAssetPath>();
         std::string const& resolvedPath = texturePath.GetResolvedPath();
-        light.dome = LoadDomelightTexture(resolvedPath);
+        light.texture = LoadLightTexture(resolvedPath);
     } else if (_lightType == HdSprimTypeTokens->rectLight) {
+        // Get shape parameters
         light.kind = LightKind::Rect;
         light.rect = {
             sceneDelegate->GetLightParamValue(id, HdLightTokens->width)
@@ -116,6 +125,11 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
             sceneDelegate->GetLightParamValue(id, HdLightTokens->height)
                 .Get<float>(),
         };
+        
+        // get texture
+        SdfAssetPath texturePath = sceneDelegate->GetLightParamValue(id, HdLightTokens->textureFile).Get<SdfAssetPath>();
+        std::string const& resolvedPath = texturePath.GetResolvedPath();
+        light.texture = LoadLightTexture(resolvedPath);
     } else if (_lightType == HdSprimTypeTokens->sphereLight) {
         light.kind = LightKind::Sphere;
         light.sphere = {
@@ -182,7 +196,7 @@ void HdEmbreeLight::Sync(HdSceneDelegate *sceneDelegate,
 
     HdEmbreeRenderer *renderer =
         static_cast<HdEmbreeRenderParam *>(renderParam)->GetRenderer();
-    _lightId = renderer->SetLight(id, light);
+    _lightId = renderer->SetLight(id, std::move(light), device);
 
     *dirtyBits &= ~HdLight::AllDirty;
 }

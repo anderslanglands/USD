@@ -26,10 +26,12 @@
 
 #include "ies.h"
 
-#include "pxr/imaging/hd/light.h"
+#include <embree3/rtcore_common.h>
+#include <embree3/rtcore_geometry.h>
+#include <pxr/imaging/hd/light.h>
 
-#include "pxr/base/gf/vec3f.h"
-#include "pxr/base/gf/matrix4f.h"
+#include <pxr/base/gf/vec3f.h>
+#include <pxr/base/gf/matrix4f.h>
 #include <limits>
 #include <memory>
 
@@ -61,9 +63,9 @@ struct Distant
     float halfAngleRadians;
 };
 
-struct Dome
+struct LightTexture
 {
-    GfVec3f* pixels;
+    GfVec3f* pixels = nullptr;
     int width;
     int height;
 };
@@ -100,6 +102,7 @@ struct Light
     GfMatrix4f xformLightToWorld;
     GfMatrix4f xformWorldToLight;
     GfVec3f color;
+    LightTexture texture;
     float intensity;
     float exposure;
     LightKind kind;
@@ -108,13 +111,14 @@ struct Light
         Cylinder cylinder;
         Disk disk;
         Distant distant;
-        Dome dome;
         Rect rect;
         Sphere sphere;
     };
     bool normalize;
     bool visible;
     Shaping shaping;
+    unsigned rtcMeshId = RTC_INVALID_GEOMETRY_ID;
+    RTCGeometry rtcGeometry;
 };
 
 constexpr unsigned InvalidLightId = std::numeric_limits<unsigned>::max();

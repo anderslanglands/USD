@@ -22,6 +22,7 @@
 // language governing permissions and limitations under the Apache License.
 //
 #include "renderer.h"
+#include "context.h"
 #include "light.h"
 #include "pcg_basic.h"
 
@@ -40,6 +41,9 @@
 
 #include <algorithm>
 #include <chrono>
+#include <embree3/rtcore_common.h>
+#include <embree3/rtcore_geometry.h>
+#include <embree3/rtcore_scene.h>
 #include <limits>
 #include <random>
 #include <stdint.h>
@@ -69,12 +73,12 @@ HdEmbreeRenderer::HdEmbreeRenderer()
 
 HdEmbreeRenderer::~HdEmbreeRenderer()
 {
-    // delete any dome light textures that have been allocated
+    // delete any light textures that have been allocated
     for (auto const& light: _lights)
     {
         if (light.kind == LightKind::Dome)
         {
-            delete[] light.dome.pixels;
+            delete[] light.texture.pixels;
         }
     }
 }
@@ -140,32 +144,81 @@ HdEmbreeRenderer::SetAovBindings(
     _aovBindingsNeedValidation = true;
 }
 
-unsigned HdEmbreeRenderer::SetLight(SdfPath const& lightPath, Light const& light)
+unsigned HdEmbreeRenderer::SetLight(SdfPath const& lightPath, Light light, RTCDevice device)
 {
+
+    size_t light_index = -1;
     auto it = _lightMap.find(lightPath);
     if (it != _lightMap.end())
     {
-        if (_lights[it->second].kind == LightKind::Dome)
-        {
-            delete[] light.dome.pixels;
-            _domeIndex = it->second;
+        Light& old_light = _lights[it->second];
+        // delete texture data
+        delete[] old_light.texture.pixels;
+        old_light.texture.pixels = nullptr;
+        // destroy mesh data
+        if (old_light.rtcMeshId != RTC_INVALID_GEOMETRY_ID) {
+            rtcDetachGeometry(_scene, light.rtcMeshId);
+            rtcReleaseGeometry(light.rtcGeometry);
         }
 
+        if (light.kind == LightKind::Dome)
+        {
+            _domeIndex = it->second;
+        }
         _lights[it->second] = light;
-        return it->second;
+        light_index = it->second;
     }
     else
     {
         if (light.kind == LightKind::Dome)
         {
             _domeIndex = _lights.size();
-            printf("Setting dome %d\n", _domeIndex);
         }
 
         _lights.push_back(light);
         _lightMap[lightPath] = _lights.size() - 1;
-        return _lights.size() - 1;
+        light_index = _lights.size() - 1;
     }
+
+    // Now create the light geometry, if required
+    // we do this last because we need the light index for the instance context
+    if (light.kind == LightKind::Rect)
+    {
+        // create light mesh
+        GfVec3f v0(-light.rect.width/2, -light.rect.height/2, 0);
+        GfVec3f v1( light.rect.width/2, -light.rect.height/2, 0);
+        GfVec3f v2( light.rect.width/2,  light.rect.height/2, 0);
+        GfVec3f v3(-light.rect.width/2,  light.rect.height/2, 0);
+
+        v0 = light.xformLightToWorld.Transform(v0);
+        v1 = light.xformLightToWorld.Transform(v1);
+        v2 = light.xformLightToWorld.Transform(v2);
+        v3 = light.xformLightToWorld.Transform(v3);
+
+        light.rtcGeometry = rtcNewGeometry(device, RTC_GEOMETRY_TYPE_QUAD);
+        GfVec3f* vertices = (GfVec3f*)rtcSetNewGeometryBuffer(light.rtcGeometry, RTC_BUFFER_TYPE_VERTEX, 0, RTC_FORMAT_FLOAT3, sizeof(float)*3, 4);
+        vertices[0] = v0;
+        vertices[1] = v1;
+        vertices[2] = v2;
+        vertices[3] = v3;
+
+        unsigned* index = (unsigned*)rtcSetNewGeometryBuffer(light.rtcGeometry, RTC_BUFFER_TYPE_INDEX, 0, RTC_FORMAT_UINT4, sizeof(unsigned)*4, 1);
+        index[0] = 0; index[1] = 1; index[2] = 2; index[3] = 3;
+
+        auto* ctx = new HdEmbreeInstanceContext;
+        ctx->lightIndex = light_index;
+        rtcSetGeometryUserData(light.rtcGeometry, ctx);
+
+        printf("committing light geo\n");
+        rtcCommitGeometry(light.rtcGeometry);
+        light.rtcMeshId = rtcAttachGeometry(_scene, light.rtcGeometry);
+        if (light.rtcMeshId == RTC_INVALID_GEOMETRY_ID) {
+            printf("could not create rect mesh\n");
+        }
+
+    }
+
+    return light_index;
 }
 
 bool
@@ -414,6 +467,7 @@ HdEmbreeRenderer::Render(HdRenderThread *renderThread)
     _completedSamples.store(0);
 
     // Commit any pending changes to the scene.
+    printf("committing scene\n");
     rtcCommitScene(_scene);
 
     if (!_ValidateAovBindings()) {
@@ -1171,6 +1225,18 @@ float EvalIES(Light const& light, GfVec3f const& wI) {
     return ies.iesFile.eval(theta, phi) / norm;
 }
 
+GfVec3f SampleLightTexture(LightTexture const& texture, float s, float t)
+{
+    if (texture.pixels == nullptr) {
+        return GfVec3f(0.0f);
+    }
+
+    int x = float(texture.width) * s;
+    int y = float(texture.height) * t;
+
+    return texture.pixels[y*texture.width + x];
+}
+
 LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u1, float u2) {
     // First, sample the shape of the area light in its surface area measure
     ShapeSample ss;
@@ -1203,6 +1269,11 @@ LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u
 
     // Combine the brightness parameters to get initial emission luminance (nits)
     GfVec3f Li = light.color * light.intensity * powf(2.0f, light.exposure);
+
+    // Multiply by the texture, if there is one
+    if (light.texture.pixels != nullptr) {
+        Li = GfCompMult(Li, SampleLightTexture(light.texture, ss.uv[0], ss.uv[1]));
+    }
 
     // If normalize is enabled, we need to divide the luminance by the surface area of the light,
     // which for an area light is equivalent to multiplying by the area pdf, which is itself the 
@@ -1237,21 +1308,15 @@ LightSample SampleAreaLight(Light const& light, GfVec3f const& position, float u
     };
 }
 
-GfVec3f SampleDomeTexture(Dome const& dome, float s, float t)
-{
-    int x = float(dome.width) * s;
-    int y = float(dome.height) * t;
-
-    return dome.pixels[y*dome.width + x];
-}
-
 LightSample EvalDomeLight(Light const& light, GfVec3f const& direction)
 {
     float t = acosf(direction[1]) / M_PI;
     float s = atan2f(direction[0], direction[2]) / (2 * M_PI);
     s = 1.0f - fmodf(s+0.5f, 1.0f);
 
-    GfVec3f Li = SampleDomeTexture(light.dome, s, t);
+    GfVec3f Li = light.texture.pixels != nullptr ? 
+        SampleLightTexture(light.texture, s, t) 
+        : GfVec3f(1.0f);
 
     return LightSample {
         Li,
@@ -1339,12 +1404,19 @@ HdEmbreeRenderer::_ComputeColor(RTCRayHit const& rayHit,
         }
     }
 
+    return GfVec4f(1, 0, 0, 1);        
+
     // Get the instance and prototype context structures for the hit prim.
     // We don't use embree's multi-level instancing; we
     // flatten everything in hydra. So instID[0] should always be correct.
     const HdEmbreeInstanceContext *instanceContext =
         static_cast<HdEmbreeInstanceContext*>(
-                rtcGetGeometryUserData(rtcGetGeometry(_scene,rayHit.hit.instID[0])));
+                rtcGetGeometryUserData(rtcGetGeometry(_scene, rayHit.hit.instID[0])));
+
+    // if we hit a light, just evaluate the light directly
+    if (instanceContext->lightIndex != -1) {
+        return GfVec4f(1, 0, 0, 1);        
+    }
 
     const HdEmbreePrototypeContext *prototypeContext =
         static_cast<HdEmbreePrototypeContext*>(
