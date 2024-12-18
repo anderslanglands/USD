@@ -267,6 +267,7 @@ private:
     SdfPath _CreateRenderTask(TfToken const& materialTag);
     void _CreateOitResolveTask();
     void _CreateSelectionTask();
+    void _CreateLinearExposureScaleTask();
     void _CreateColorizeSelectionTask();
     void _CreateColorCorrectionTask();
     void _CreateVisualizeAovTask();
@@ -287,6 +288,7 @@ private:
     bool _ShadowsEnabled() const;
     bool _SelectionEnabled() const;
     bool _ColorizeSelectionEnabled() const;
+    bool _LinearExposureScaleEnabled() const;
     bool _ColorCorrectionEnabled() const;
     bool _VisualizeAovEnabled() const;
     bool _ColorizeQuantizationEnabled() const;
@@ -381,6 +383,7 @@ private:
     SdfPath _aovInputTaskId;
     SdfPath _oitResolveTaskId;
     SdfPath _selectionTaskId;
+    SdfPath _linearExposureScaleTaskId;
     SdfPath _colorizeSelectionTaskId;
     SdfPath _colorCorrectionTaskId;
     SdfPath _visualizeAovTaskId;
